@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>国語 マーカーと指摘</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="toolbar" id="toolbar">
+    <div class="row">
+      <select id="bookSel" aria-label="問題セット"></select>
+      <button id="prevBtn" aria-label="前のページ">◀</button>
+      <select id="pageSel" aria-label="ページ"></select>
+      <button id="nextBtn" aria-label="次のページ">▶</button>
+      <button id="menuBtn" aria-label="メニュー">⋯</button>
+    </div>
+    <div class="row">
+      <button id="markerBtn" class="mode-btn" aria-pressed="false">マーカー</button>
+      <div id="palette" class="palette" hidden>
+        <button class="tool" data-tool="yellow"><i class="sw sw-yellow"></i>重要</button>
+        <button class="tool" data-tool="red"><i class="sw sw-red"></i>ダメ</button>
+        <button class="tool" data-tool="blue"><i class="sw sw-blue"></i>根拠</button>
+        <button class="tool" data-tool="erase"><i class="sw sw-erase"></i>消す</button>
+      </div>
+      <button id="listBtn" class="list-btn">一覧<span id="listCount" class="badge"></span></button>
+    </div>
+  </header>
+
+  <main id="viewer" class="viewer">
+    <article id="paper" class="paper"></article>
+  </main>
+
+  <!-- 指摘メモ -->
+  <div id="memoSheet" class="sheet" hidden>
+    <div class="sheet-body">
+      <div class="sheet-head"><i id="memoChip" class="sw"></i><span id="memoWhere"></span></div>
+      <p id="memoExcerpt" class="excerpt"></p>
+      <textarea id="memoText" rows="2" maxlength="100" placeholder="例：本文に書いていない"></textarea>
+      <div class="presets" id="memoPresets"></div>
+      <div class="recolor">
+        <span>色：</span>
+        <button data-recolor="yellow"><i class="sw sw-yellow"></i>重要</button>
+        <button data-recolor="red"><i class="sw sw-red"></i>ダメ</button>
+        <button data-recolor="blue"><i class="sw sw-blue"></i>根拠</button>
+      </div>
+      <div class="actions">
+        <button id="memoDelete" class="danger">マーカーを消す</button>
+        <span class="spacer"></span>
+        <button id="memoCancel">キャンセル</button>
+        <button id="memoSave" class="primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 一覧 -->
+  <div id="listPanel" class="panel" hidden>
+    <div class="panel-head">
+      <h2 id="listTitle">このページのマーカー</h2>
+      <button id="listClose">閉じる</button>
+    </div>
+    <ol id="markList" class="mark-list"></ol>
+  </div>
+
+  <!-- メニュー -->
+  <div id="menuSheet" class="sheet" hidden>
+    <div class="sheet-body">
+      <h2>PDFに出力</h2>
+      <label><input type="radio" name="pRange" value="page" checked> このページだけ</label>
+      <label><input type="radio" name="pRange" value="all"> この問題セットの全ページ</label>
+      <label><input type="checkbox" id="pMemo" checked> 指摘メモの一覧を別ページに付ける</label>
+      <p class="hint">印刷画面で「PDF として保存」を選んでください。</p>
+      <div class="actions"><span class="spacer"></span><button id="printBtn" class="primary">PDFに出力</button></div>
+      <hr>
+      <h2>その他</h2>
+      <div class="actions wrap">
+        <button id="importBtn">問題を読み込む（JSON）</button>
+        <button id="clearPageBtn" class="danger">このページのマーカーを全部消す</button>
+      </div>
+      <input type="file" id="importFile" accept=".json,application/json" hidden>
+      <div class="actions"><span class="spacer"></span><button id="menuClose">閉じる</button></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <div id="printRoot" class="print-root"></div>
+
+  <script src="data/sample.js"></script>
+  <script src="js/text.js"></script>
+  <script src="js/marks.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/print.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
