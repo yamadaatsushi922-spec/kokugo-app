@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0b0d12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>PIT WALL 26</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ セットアップ ============ -->
+<section id="setup" class="screen active">
+  <header class="brand">
+    <div class="logo">PIT WALL <span>26</span></div>
+    <div class="sub">ピットウォール・ストラテジー・シミュレーター</div>
+  </header>
+
+  <div class="panel">
+    <h2>1. グランプリ</h2>
+    <select id="circuitSel"></select>
+    <div id="circuitInfo" class="info"></div>
+    <canvas id="previewCanvas" width="600" height="360"></canvas>
+  </div>
+
+  <div class="panel">
+    <h2>2. チーム</h2>
+    <div id="teamGrid" class="team-grid"></div>
+  </div>
+
+  <div class="panel">
+    <h2>3. スタートタイヤ</h2>
+    <div id="tyreSetup"></div>
+  </div>
+
+  <div class="panel">
+    <h2>4. オプション</h2>
+    <label class="opt"><input type="checkbox" id="optRadio" checked> 無線読み上げ（音声）</label>
+    <label class="opt"><input type="checkbox" id="optAutoSlow" checked> イベント発生時は自動で等倍に戻す</label>
+    <div class="row-btns">
+      <button id="btnStandings" class="ghost">ランキングを見る</button>
+      <button id="btnReset" class="ghost danger">シーズンをリセット</button>
+    </div>
+  </div>
+
+  <button id="btnStart" class="big">グリッドへ ▶</button>
+</section>
+
+<!-- ============ レース ============ -->
+<section id="race" class="screen">
+  <div id="topbar">
+    <div class="tb-left">
+      <div id="lapInfo">LAP 0/0</div>
+      <div id="flagInfo" class="flag green">GREEN</div>
+    </div>
+    <div class="tb-mid">
+      <div id="weatherInfo"></div>
+    </div>
+    <div class="tb-right">
+      <button id="btnPause" class="sm">⏸</button>
+      <button id="btnRadioToggle" class="sm">📻</button>
+    </div>
+  </div>
+  <div id="speedBar"></div>
+
+  <div id="raceMain">
+    <div id="trackWrap">
+      <canvas id="trackCanvas"></canvas>
+      <div id="radioFeed"></div>
+      <div id="eventBanner"></div>
+    </div>
+    <div id="tower"></div>
+  </div>
+
+  <div id="carCards"></div>
+  <div id="log"></div>
+</section>
+
+<!-- ============ 表彰式 ============ -->
+<section id="podium" class="screen">
+  <canvas id="podiumCanvas"></canvas>
+  <div id="podiumUI">
+    <div id="resultTable"></div>
+    <div class="row-btns">
+      <button id="btnToStandings">ランキング</button>
+      <button id="btnNext" class="big">次のグランプリへ</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ランキング ============ -->
+<div id="standingsModal" class="modal hidden">
+  <div class="modal-inner">
+    <div class="tabs">
+      <button data-tab="drv" class="active">ドライバー</button>
+      <button data-tab="con">コンストラクター</button>
+      <button id="closeStandings" class="close">✕</button>
+    </div>
+    <div id="standingsBody"></div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
