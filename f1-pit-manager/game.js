@@ -877,7 +877,7 @@ function renderStandings(tab) {
 document.querySelectorAll('.tabs [data-tab]').forEach(b => b.onclick = () => renderStandings(b.dataset.tab));
 $('#closeStandings').onclick = () => $('#standingsModal').classList.add('hidden');
 $('#btnStandings').onclick = openStandings;
-$('#btnReset').onclick = () => { if (confirm('シーズンのポイントをリセットしますか？')) { champ = { ...START_POINTS }; roundIdx = 0; store.set('points', champ); store.set('round', 0); computePace(); setup.circuit = CIRCUITS[0]; renderSetup(); } };
+$('#btnReset').onclick = () => { const b = $('#btnReset'); if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'もう一度タップでリセット'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'シーズンをリセット'; }, 3000); return; } delete b.dataset.armed; b.textContent = 'シーズンをリセット'; { champ = { ...START_POINTS }; roundIdx = 0; store.set('points', champ); store.set('round', 0); computePace(); setup.circuit = CIRCUITS[0]; renderSetup(); } };
 $('#btnStart').onclick = startRace;
 
 function showScreen(id) { document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === id)); window.scrollTo(0, 0); }

@@ -1,6 +1,7 @@
 :root {
   --bg: #0b0d12; --panel: #151922; --panel2: #1d2330; --line: #2a3242;
   --txt: #e9edf5; --mute: #8b95a8; --accent: #e10600; --ok: #2fd34a; --warn: #ffd400;
+  color-scheme: dark;
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--txt);
