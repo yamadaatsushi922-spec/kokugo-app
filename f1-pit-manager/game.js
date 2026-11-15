@@ -23,11 +23,22 @@ let roundIdx = store.get('round', 0);
 const ALL_DRIVERS = [];
 TEAMS.forEach(t => t.drivers.forEach(d => { d.team = t; ALL_DRIVERS.push(d); }));
 
-// チャンピオンシップポイントからマシンの速さを算出
+// 2026年の実データ（平均グリッド位置・ランキング・リタイア率）からマシンとドライバーの強さを算出
 function computePace() {
-  const tp = TEAMS.map(t => t.drivers.reduce((s, d) => s + (STRENGTH_POINTS[d.code] || 0), 0));
-  const max = Math.max(...tp, 1);
-  TEAMS.forEach((t, i) => { t.pace = 0.5 + 0.5 * Math.pow(tp[i] / max, 0.55); t.points = t.drivers.reduce((s, d) => s + (champ[d.code] || 0), 0); });
+  const tg = TEAMS.map(t => t.drivers.reduce((s, d) => s + (AVG_GRID[d.code] || 15), 0) / t.drivers.length);
+  const gmin = Math.min(...tg), gmax = Math.max(...tg);
+  const pmax = Math.max(...Object.values(STRENGTH_POINTS), 1);
+  TEAMS.forEach((t, i) => {
+    t.pace = 1 - (tg[i] - gmin) / (gmax - gmin) * 0.5;
+    t.points = t.drivers.reduce((s, d) => s + (champ[d.code] || 0), 0);
+    t.reliability = (DNF_RATE_2026[t.realId] ?? 0.12) * 0.55;
+    const [a, b] = t.drivers;
+    t.drivers.forEach(d => {
+      const mate = d === a ? b : a;
+      const delta = (AVG_GRID[mate.code] || 15) - (AVG_GRID[d.code] || 15);
+      d.skill = clamp(0.93 + clamp(delta * 0.008, -0.05, 0.05) + (STRENGTH_POINTS[d.code] || 0) / pmax * 0.04, 0.8, 0.995);
+    });
+  });
 }
 computePace();
 
@@ -140,7 +151,8 @@ function renderCircuitInfo() {
   const c = setup.circuit;
   $('#circuitInfo').innerHTML = `<b>${c.track}</b>　${c.laps}周 / 1周 ${c.len.toFixed(3)} km / 総距離 ${(c.laps * c.len).toFixed(3)} km<br>
     持ち込み: <b>${c.comp}</b>（H/M/S）　ピットロス 約${c.pitLoss}秒　タイヤ攻撃性 ${'●'.repeat(Math.round(c.deg * 3))}　抜きにくさ ${'●'.repeat(Math.round(c.ovt * 5))}<br>
-    天候: 過去の本番（${c.weather.map(w => w.year).join(', ')}）からランダム → <b>${forecastText(setup.weather)}</b>`;
+    天候: 過去の本番（${c.weather.map(w => w.year).join(', ')}）からランダム → <b>${forecastText(setup.weather)}</b><br>
+    グリッド: <b>${REAL_GRIDS[c.id] ? '2026年の実際の決勝スターティンググリッド' : '未開催のため予選シミュレーション'}</b>`;
   const cv = $('#previewCanvas'); const ctx = cv.getContext('2d');
   c._track = c._track || buildTrack(c.shape);
   drawTrack(ctx, cv.width, cv.height, c, c._track);
@@ -168,6 +180,8 @@ function renderTyreSetup() {
 let R = null; // race state
 
 function qualifying(c) {
+  const real = REAL_GRIDS[c.id];
+  if (real) return real.map(code => ALL_DRIVERS.find(d => d.code === code)).filter(Boolean);
   // 予選：マシン速さ＋ドライバー一発の速さ＋ばらつき
   return ALL_DRIVERS.map(d => ({ d, t: (1 - d.team.pace) * 3.0 + (1 - d.skill) * 1.6 + gauss() * 0.18 + (setup.weather.rain.some(r => r.s <= 0.02) ? (1 - d.wet) * 2 : 0) }))
     .sort((a, b) => a.t - b.t).map(x => x.d);
@@ -248,7 +262,7 @@ function lapTime(car) {
   if (R.sc && R.sc.type === 'SC') return c.baseLap * 1.48;
   let lt = c.baseLap;
   lt += (1 - car.team.pace) * 4.2 * s;
-  lt += (1 - d.skill) * 1.4 * s;
+  lt += (1 - d.skill) * 3.0 * s;
   lt += car.damage * s;
   const equivLaps = car.wear * comp.life / 100;
   if (isDry(car.tyre)) {
@@ -518,7 +532,7 @@ function retire(car, kind) {
   const r = Math.random();
   let type = null;
   if (kind === 'crash') type = r < 0.12 ? null : r < (0.45 - R.wet * 0.2) ? 'VSC' : 'SC';
-  else type = r < 0.55 ? null : r < 0.88 ? 'VSC' : 'SC';
+  else type = r < 0.15 ? null : r < 0.85 ? 'VSC' : 'SC'; // マシントラブルでの停止はほぼVSC
   if (R.checkered || R.leaderLap >= R.c.laps - 1) type = null;
   if (!type) { R.yellow = R.c.baseLap * 0.5; return; }
   deploySC(type);
