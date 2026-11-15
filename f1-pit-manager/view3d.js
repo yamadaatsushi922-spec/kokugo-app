@@ -5,7 +5,7 @@
 const V3 = (() => {
   // サーキットごとの高低差（m）の目安
   const ELEV = { AUS: 3, CHN: 6, JPN: 30, BHR: 10, SAU: 4, MIA: 3, CAN: 4, MON: 28, ESP: 22, AUT: 45, GBR: 9, BEL: 48, HUN: 22, NED: 18, ITA: 6, MAD: 12, AZE: 20, SIN: 3, USA: 32, MEX: 6, BRA: 30, LVG: 2, QAT: 4, ABU: 4 };
-  const N = 1400;           // コースのサンプル数
+  const N = 2400;           // コースのサンプル数
   const TRACK_W = 14;       // コース幅 (m)
   const PIT_OFF = 24;       // ピットレーンのオフセット (m)
   let S = null;             // 現在のシーン状態

@@ -46,11 +46,22 @@ computePace();
 //  コース形状（Catmull-Rom スプライン → 弧長テーブル）
 // =============================================================
 function buildTrack(shape) {
+  // 1) 元データを等間隔に再サンプリング → 2) ガウス平滑化でカクつきを除去 → 3) Catmull-Rom で補間
+  const n0 = shape.length, seg = [0];
+  for (let i = 1; i <= n0; i++) { const p = shape[i - 1], q = shape[i % n0]; seg.push(seg[i - 1] + Math.hypot(q[0] - p[0], q[1] - p[1])); }
+  const per0 = seg[n0], M = 720, rs = [];
+  for (let k = 0, j = 0; k < M; k++) {
+    const t = k / M * per0; while (seg[j + 1] < t) j++;
+    const p = shape[j], q = shape[(j + 1) % n0], u = (t - seg[j]) / ((seg[j + 1] - seg[j]) || 1);
+    rs.push([p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u]);
+  }
+  const W = [1, 4, 8, 11, 12, 11, 8, 4, 1], wsum = W.reduce((a, b) => a + b, 0), sm = [];
+  for (let i = 0; i < M; i++) { let x = 0, y = 0; W.forEach((w, k) => { const p = rs[(i + k - 4 + M) % M]; x += p[0] * w; y += p[1] * w; }); sm.push([x / wsum, y / wsum]); }
   const pts = [];
-  const n = shape.length;
+  const n = sm.length;
   for (let i = 0; i < n; i++) {
-    const p0 = shape[(i - 1 + n) % n], p1 = shape[i], p2 = shape[(i + 1) % n], p3 = shape[(i + 2) % n];
-    const per = Math.max(3, Math.round(900 / n));
+    const p0 = sm[(i - 1 + n) % n], p1 = sm[i], p2 = sm[(i + 1) % n], p3 = sm[(i + 2) % n];
+    const per = 4;
     for (let k = 0; k < per; k++) { const t = k / per;
       const t2 = t * t, t3 = t2 * t;
       const f = (a, b, c, d) => 0.5 * ((2 * b) + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
@@ -76,6 +87,25 @@ function buildTrack(shape) {
       return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, Math.atan2(b[1] - a[1], b[0] - a[0])];
     },
   };
+}
+
+// 速度プロファイル：曲率からコーナーの限界速度を出し、加速・ブレーキ限界で前後に伝播
+// （実車同様、コーナーで減速しストレートで加速する）。戻り値 vAt(frac) は m/s、T0 は1周の基準時間
+function makeProfile(track, L) {
+  const K = 2400, ds = L / K, ang = [], v = new Float32Array(K);
+  for (let i = 0; i < K; i++) ang.push(track.at(i / K)[2]);
+  const kap = new Float32Array(K);
+  for (let i = 0; i < K; i++) { let d = ang[(i + 1) % K] - ang[i]; d = Math.atan2(Math.sin(d), Math.cos(d)); kap[i] = Math.abs(d) / ds; }
+  const ks = new Float32Array(K);
+  for (let i = 0; i < K; i++) { let t = 0; for (let k = -6; k <= 6; k++) t += kap[(i + k + K) % K]; ks[i] = t / 13; }
+  const VMAX = 94, ALAT = 36;
+  for (let i = 0; i < K; i++) v[i] = Math.min(VMAX, Math.sqrt(ALAT / Math.max(ks[i], 1e-5)));
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 1; i <= K; i++) { const a = v[(i - 1) % K], acc = 3 + 12 * (1 - a / VMAX); const lim = Math.sqrt(a * a + 2 * acc * ds); if (v[i % K] > lim) v[i % K] = lim; }
+    for (let i = K - 1; i >= 0; i--) { const b = v[(i + 1) % K], lim = Math.sqrt(b * b + 2 * 42 * ds); if (v[i] > lim) v[i] = lim; }
+  }
+  let T0 = 0; for (let i = 0; i < K; i++) T0 += ds / v[i];
+  return { T0, v, vAt(frac) { const f = (((frac % 1) + 1) % 1) * K, i = Math.floor(f), u = f - i; return v[i] * (1 - u) + v[(i + 1) % K] * u; } };
 }
 
 // 地形（木・建物・観客席）を決定論的に生成
@@ -130,14 +160,25 @@ function mix(a, b, t) { const pa = parseInt(a.slice(1), 16), pb = parseInt(b.sli
 // =============================================================
 //  セットアップ画面
 // =============================================================
-const setup = { circuit: CIRCUITS[roundIdx % CIRCUITS.length], team: TEAMS[0], tyres: ['M', 'M'], weather: null };
+// 選んだ選択肢（グランプリ・チーム・スタートタイヤ・オプション・倍速・カメラ）を保存して次回も復元
+const prefs = store.get('prefs', {});
+const savePrefs = () => store.set('prefs', prefs);
+const setup = {
+  circuit: CIRCUITS.find(c => c.id === prefs.circuit) || CIRCUITS[roundIdx % CIRCUITS.length],
+  team: TEAMS.find(t => t.id === prefs.team) || TEAMS[0],
+  tyres: Array.isArray(prefs.tyres) ? prefs.tyres.slice(0, 2) : ['M', 'M'], weather: null,
+};
+if ('radio' in prefs) $('#optRadio').checked = prefs.radio;
+if ('autoSlow' in prefs) $('#optAutoSlow').checked = prefs.autoSlow;
+$('#optRadio').onchange = () => { prefs.radio = $('#optRadio').checked; savePrefs(); };
+$('#optAutoSlow').onchange = () => { prefs.autoSlow = $('#optAutoSlow').checked; savePrefs(); };
 function chooseWeather(c) { return pick(c.weather); }
 
 function renderSetup() {
   const sel = $('#circuitSel');
   sel.innerHTML = CIRCUITS.map((c, i) => `<option value="${i}">R${i + 1}  ${c.name} — ${c.track}</option>`).join('');
   sel.value = CIRCUITS.indexOf(setup.circuit);
-  sel.onchange = () => { setup.circuit = CIRCUITS[+sel.value]; setup.weather = chooseWeather(setup.circuit); renderCircuitInfo(); };
+  sel.onchange = () => { setup.circuit = CIRCUITS[+sel.value]; prefs.circuit = setup.circuit.id; savePrefs(); setup.weather = chooseWeather(setup.circuit); renderCircuitInfo(); };
   setup.weather = chooseWeather(setup.circuit);
   renderCircuitInfo();
   renderTeams();
@@ -164,14 +205,14 @@ function renderTeams() {
     <div class="stripe" style="background:${t.color}"></div>
     <div class="tn">${t.name}</div><div class="td">${t.drivers.map(d => d.code).join(' / ')} · 今季 ${t.points}pt</div>
     <div class="pace"><i style="width:${Math.round((t.pace - 0.5) * 200)}%"></i></div></div>`).join('');
-  document.querySelectorAll('.team-card').forEach(el => el.onclick = () => { setup.team = TEAMS.find(t => t.id === el.dataset.id); renderTeams(); renderTyreSetup(); });
+  document.querySelectorAll('.team-card').forEach(el => el.onclick = () => { setup.team = TEAMS.find(t => t.id === el.dataset.id); prefs.team = setup.team.id; savePrefs(); renderTeams(); renderTyreSetup(); });
 }
 function tyreBtn(k, sel, extra = '') { const c = COMPOUNDS[k]; return `<button class="tbtn ${sel ? 'sel' : ''}" data-k="${k}" ${extra} style="border-color:${c.color};color:${c.color}">${k}</button>`; }
 function renderTyreSetup() {
   $('#tyreSetup').innerHTML = setup.team.drivers.map((d, i) => `<div class="tyre-row" data-i="${i}">
     <div class="dn">#${d.num} ${d.name}<small>${d.quirk}</small></div>
     ${['S', 'M', 'H', 'I', 'W'].map(k => tyreBtn(k, setup.tyres[i] === k)).join('')}</div>`).join('');
-  document.querySelectorAll('#tyreSetup .tyre-row').forEach(row => row.querySelectorAll('.tbtn').forEach(b => b.onclick = () => { setup.tyres[+row.dataset.i] = b.dataset.k; renderTyreSetup(); }));
+  document.querySelectorAll('#tyreSetup .tyre-row').forEach(row => row.querySelectorAll('.tbtn').forEach(b => b.onclick = () => { setup.tyres[+row.dataset.i] = b.dataset.k; prefs.tyres = setup.tyres; savePrefs(); renderTyreSetup(); }));
 }
 
 // =============================================================
@@ -192,10 +233,11 @@ function startRace() {
   c._track = c._track || buildTrack(c.shape);
   const grid = qualifying(c);
   const L = c.len * 1000;
+  const prof = makeProfile(c._track, L);
   const wetStart = setup.weather.rain.find(r => r.s <= 0.02);
   R = {
-    c, L, track: c._track, wx: setup.weather, time: 0, leaderLap: 0, checkered: false, finished: false,
-    sc: null, scCar: 0, wet: wetStart ? wetStart.i * 0.9 : 0, rainNow: 0, target: 10, slowUntil: 0, paused: false,
+    c, L, prof, track: c._track, wx: setup.weather, time: 0, leaderLap: 0, checkered: false, finished: false,
+    sc: null, scCar: 0, wet: wetStart ? wetStart.i * 0.9 : 0, rainNow: 0, target: SPEEDS.includes(prefs.speed) ? prefs.speed : 10, slowUntil: 0, paused: false,
     radioOn: $('#optRadio').checked, autoSlow: $('#optAutoSlow').checked, finishOrder: [], yellow: 0, log: [],
     cars: grid.map((d, i) => {
       const player = d.team === setup.team;
@@ -214,7 +256,7 @@ function startRace() {
   showScreen('race');
   buildRaceUI();
   R.is3d = false;
-  if (window.THREE) { try { V3.init($('#view3d'), R); R.is3d = true; } catch (e) { console.warn('3D init failed', e); } }
+  if (window.THREE) { try { V3.init($('#view3d'), R); R.is3d = true; if (prefs.cam) V3.setMode(prefs.cam); } catch (e) { console.warn('3D init failed', e); } }
   $('#trackWrap').classList.toggle('is3d', R.is3d);
   $('#camBar').style.display = R.is3d ? '' : 'none';
   resizeCanvas(); if (R.is3d) V3.resize();
@@ -318,6 +360,9 @@ function loop(now) {
   if (!R.finished) requestAnimationFrame(loop);
 }
 
+// そのマシンの現在地での速度（m/s）：コーナーで遅く、ストレートで速い
+function spAt(car) { return R.prof.vAt(car.dist / R.L) * R.prof.T0 / car.curLT; }
+
 function running() { return R.cars.filter(c => !c.out && !c.finished); }
 function order() {
   return [...R.cars].sort((a, b) => {
@@ -345,6 +390,10 @@ function tick(dt) {
   if (prevRain < 0.05 && R.rainNow >= 0.05) { event('雨が降り始めた', '#2f7dff', true); addLog('🌧️ <b>雨</b>が降り始めました'); playerRadio(pick(RADIO.rain).replace('{n}', Math.ceil(rnd(1, 15)))); }
   if (prevRain >= 0.05 && R.rainNow < 0.05) { event('雨が止んだ', '#ffd400', true); addLog('🌤️ 雨が止みました'); }
   if (R.rainNow > 0.6 && prevRain <= 0.6) playerRadio(pick(RADIO.rainHeavy));
+  // 雨の強さが変わったら（小雨⇄雨⇄強い雨）等倍に戻す
+  const tier = r => r > 0.6 ? 3 : r > 0.25 ? 2 : r >= 0.05 ? 1 : 0;
+  const t0 = tier(prevRain), t1 = tier(R.rainNow);
+  if (t0 !== t1 && t0 > 0 && t1 > 0) { const nm = ['', '小雨', '雨', '強い雨'][t1]; event(`天候変化: ${nm}`, '#2f7dff', true); addLog(`🌧️ 雨が<b>${nm}</b>に変化`); }
   if (R._wetIdeal !== idealTyre(R.wet)) {
     if (R._wetIdeal) { const t = idealTyre(R.wet); addLog(`路面: <b>${t === 'dry' ? 'スリック' : COMPOUNDS[t].jp}</b>コンディション`); event(`路面: ${t === 'dry' ? 'スリック' : COMPOUNDS[t].jp}コンディション`, '#2fd34a', true); if (t === 'dry') playerRadio(pick(RADIO.drying)); }
     R._wetIdeal = idealTyre(R.wet);
@@ -361,7 +410,7 @@ function tick(dt) {
       if (car.pitTimer <= 0) pitExit(car);
       continue;
     }
-    let sp = R.L / car.curLT;
+    let sp = spAt(car);
     if (scOn && i > 0) { // SC中は隊列を詰める
       const gT = (ord[i - 1].dist - car.dist) / sp;
       if (ord[i - 1].pitTimer <= 0 && gT > 1.0 && gT < R.c.baseLap * 0.8) sp *= 1.35;
@@ -377,7 +426,7 @@ function tick(dt) {
   const ord2 = order().filter(c => !c.out && !c.finished && c.pitTimer <= 0);
   for (let i = 1; i < ord2.length; i++) {
     const a = ord2[i - 1], b = ord2[i];
-    const sp = R.L / b.curLT;
+    const sp = spAt(b);
     const gap = a.dist - b.dist;
     if (gap > R.L * 0.5) { b.gapAhead = 99; b.ovMode = false; continue; }
     const gT = gap / sp;
@@ -413,7 +462,7 @@ function tick(dt) {
 
 function onLap(car) {
   car.lap++;
-  const over = (car.dist - car.lap * R.L) / (R.L / car.curLT); // ティック内の超過分を補間
+  const over = (car.dist - car.lap * R.L) / spAt(car); // ティック内の超過分を補間
   const tNow = R.time - Math.max(0, over);
   const lt = tNow - car.lapStart; car.lapStart = tNow;
   if (car.lap > 1) { car.lastLap = lt; if (lt < car.bestLap) car.bestLap = lt; }
@@ -530,9 +579,7 @@ function retire(car, kind) {
   event(`${car.d.code} リタイア`, '#e10600');
   // 事故の度合いで SC / VSC / 黄旗
   const r = Math.random();
-  let type = null;
-  if (kind === 'crash') type = r < 0.12 ? null : r < (0.45 - R.wet * 0.2) ? 'VSC' : 'SC';
-  else type = r < 0.15 ? null : r < 0.85 ? 'VSC' : 'SC'; // マシントラブルでの停止はほぼVSC
+  let type = 'SC'; // リタイアが出たら必ずセーフティカー
   if (R.checkered || R.leaderLap >= R.c.laps - 1) type = null;
   if (!type) { R.yellow = R.c.baseLap * 0.5; return; }
   deploySC(type);
@@ -605,7 +652,7 @@ function radio(car, text, important) {
   }
 }
 function playerRadio(text) { const c = R.cars.find(c => c.player && !c.out && !c.finished); if (c) radio(c, text); }
-function slowDown() { if (R && R.autoSlow && R.target > 1) R.slowUntil = performance.now() + 5000; }
+function slowDown() { if (R && R.autoSlow && R.target > 1) R.slowUntil = performance.now() + 8000; }
 function event(text, color, slow) {
   const b = $('#eventBanner'); if (!b) return;
   b.textContent = text; b.style.display = 'block'; b.style.background = color; b.style.color = ['#fff', '#ffd400', '#2fd34a', '#ff8a1f'].includes(color) || color.startsWith('#e8') ? '#000' : '#fff';
@@ -623,13 +670,13 @@ function addLog(html) {
 // =============================================================
 function buildRaceUI() {
   $('#speedBar').innerHTML = SPEEDS.map(s => `<button data-s="${s}" class="${s === R.target ? 'sel' : ''}">${s}x</button>`).join('') + '<span class="cur" id="curSpeed"></span>';
-  $('#speedBar').querySelectorAll('button').forEach(b => b.onclick = () => { R.target = +b.dataset.s; R.slowUntil = 0; $('#speedBar').querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b)); });
+  $('#speedBar').querySelectorAll('button').forEach(b => b.onclick = () => { R.target = +b.dataset.s; R.slowUntil = 0; prefs.speed = R.target; savePrefs(); $('#speedBar').querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b)); });
   const pl = R.cars.filter(c => c.player).sort((a, b) => a.pIdx - b.pIdx);
   const cams = [['top', '俯瞰'], ['heli', 'ヘリ'], ['tv', '中継'], ['chase', '1台追尾']];
   const foc = [['p0', pl[0].d.code], ['p1', pl[1].d.code], ['leader', 'トップ']];
-  $('#camBar').innerHTML = cams.map(([k, l]) => `<button data-cam="${k}" class="${k === 'chase' ? 'sel' : ''}">${l}</button>`).join('') + '<span class="sep"></span>' +
+  $('#camBar').innerHTML = cams.map(([k, l]) => `<button data-cam="${k}" class="${k === (prefs.cam || 'chase') ? 'sel' : ''}">${l}</button>`).join('') + '<span class="sep"></span>' +
     foc.map(([k, l]) => `<button data-foc="${k}" class="${k === 'p0' ? 'sel' : ''}">${l}</button>`).join('');
-  $('#camBar').querySelectorAll('[data-cam]').forEach(b => b.onclick = () => { V3.setMode(b.dataset.cam); $('#camBar').querySelectorAll('[data-cam]').forEach(x => x.classList.toggle('sel', x === b)); });
+  $('#camBar').querySelectorAll('[data-cam]').forEach(b => b.onclick = () => { V3.setMode(b.dataset.cam); prefs.cam = b.dataset.cam; savePrefs(); $('#camBar').querySelectorAll('[data-cam]').forEach(x => x.classList.toggle('sel', x === b)); });
   $('#camBar').querySelectorAll('[data-foc]').forEach(b => b.onclick = () => setFocus(b.dataset.foc));
   $('#tower').onclick = e => { const row = e.target.closest('.trow'); if (row && R.is3d) setFocus('code:' + row.dataset.code); };
   $('#btnPause').onclick = () => { R.paused = !R.paused; $('#btnPause').textContent = R.paused ? '▶' : '⏸'; };
@@ -834,7 +881,7 @@ function showPodium(res, classified) {
       const gap = c.out ? c.reason : c.dsq ? 'コンパウンド義務違反' : c.pos === 1 ? fmtT(c.finishTime) : (c.lap < R.c.laps ? `+${R.c.laps - c.lap}L` : '+' + (c.finishTime - classified[0].finishTime).toFixed(3));
       return `<tr class="${meCodes.includes(c.d.code) ? 'me' : ''}"><td>${pos}</td><td>${c.d.name}</td><td><span style="color:${c.team.color}">■</span> ${c.team.name}</td><td>${gap}</td><td>${c.stops}</td><td class="num">${c.pts || 0}</td></tr>`;
     }).join('')}</table>`;
-  $('#btnNext').onclick = () => { setup.circuit = CIRCUITS[roundIdx % CIRCUITS.length]; showScreen('setup'); renderSetup(); };
+  $('#btnNext').onclick = () => { setup.circuit = CIRCUITS[roundIdx % CIRCUITS.length]; prefs.circuit = setup.circuit.id; savePrefs(); showScreen('setup'); renderSetup(); };
   $('#btnToStandings').onclick = openStandings;
   if (R.is3d) V3.dispose();
   let ok3d = false;
