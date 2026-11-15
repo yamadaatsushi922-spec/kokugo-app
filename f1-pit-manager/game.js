@@ -16,7 +16,8 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('pw26_' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
   set(k, v) { try { localStorage.setItem('pw26_' + k, JSON.stringify(v)); } catch (e) {} },
 };
-let champ = store.get('points', null) || { ...START_POINTS };
+const zeroPoints = () => Object.fromEntries(Object.keys(STRENGTH_POINTS).map(k => [k, 0]));
+let champ = store.get('champ26', null) || zeroPoints();
 let roundIdx = store.get('round', 0);
 
 const ALL_DRIVERS = [];
@@ -24,9 +25,9 @@ TEAMS.forEach(t => t.drivers.forEach(d => { d.team = t; ALL_DRIVERS.push(d); }))
 
 // チャンピオンシップポイントからマシンの速さを算出
 function computePace() {
-  const tp = TEAMS.map(t => t.drivers.reduce((s, d) => s + (champ[d.code] || 0), 0));
+  const tp = TEAMS.map(t => t.drivers.reduce((s, d) => s + (STRENGTH_POINTS[d.code] || 0), 0));
   const max = Math.max(...tp, 1);
-  TEAMS.forEach((t, i) => { t.pace = 0.5 + 0.5 * Math.pow(tp[i] / max, 0.55); t.points = tp[i]; });
+  TEAMS.forEach((t, i) => { t.pace = 0.5 + 0.5 * Math.pow(tp[i] / max, 0.55); t.points = t.drivers.reduce((s, d) => s + (champ[d.code] || 0), 0); });
 }
 computePace();
 
@@ -38,7 +39,8 @@ function buildTrack(shape) {
   const n = shape.length;
   for (let i = 0; i < n; i++) {
     const p0 = shape[(i - 1 + n) % n], p1 = shape[i], p2 = shape[(i + 1) % n], p3 = shape[(i + 2) % n];
-    for (let t = 0; t < 1; t += 1 / 24) {
+    const per = Math.max(3, Math.round(900 / n));
+    for (let k = 0; k < per; k++) { const t = k / per;
       const t2 = t * t, t3 = t2 * t;
       const f = (a, b, c, d) => 0.5 * ((2 * b) + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
       pts.push([f(p0[0], p1[0], p2[0], p3[0]), f(p0[1], p1[1], p2[1], p3[1])]);
@@ -76,9 +78,9 @@ function terrainFeatures(c) {
 }
 
 function drawTrack(ctx, w, h, c, track, opts = {}) {
-  const pad = 0.07;
-  const sx = x => (pad + x / 100 * (1 - pad * 2)) * w;
-  const sy = y => (pad + y / 100 * (1 - pad * 2)) * h;
+  const k = Math.min(w, h) * 0.88 / 100, ox = (w - 100 * k) / 2, oy = (h - 100 * k) / 2;
+  const sx = x => ox + x * k;
+  const sy = y => oy + y * k;
   const night = c.night;
   // 地面
   ctx.fillStyle = night ? shade(c.terrain, -0.55) : c.terrain;
@@ -89,7 +91,7 @@ function drawTrack(ctx, w, h, c, track, opts = {}) {
     else { ctx.fillStyle = night ? 'rgba(255,220,140,.25)' : 'rgba(120,120,120,.5)'; ctx.fillRect(sx(f.x), sy(f.y), f.s * w / 120, f.s * w / 160); }
   }
   const path = () => { ctx.beginPath(); track.pts.forEach((p, i) => i ? ctx.lineTo(sx(p[0]), sy(p[1])) : ctx.moveTo(sx(p[0]), sy(p[1]))); ctx.closePath(); };
-  const tw = Math.max(6, w / 45);
+  const tw = Math.max(opts.mini ? 3 : 5, Math.min(w, h) / (opts.mini ? 40 : 60));
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   path(); ctx.strokeStyle = night ? '#3a3f2a' : '#9aa37a'; ctx.lineWidth = tw * 2.4; ctx.stroke(); // ランオフ
   path(); ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = tw + 3; ctx.stroke();               // 白線
@@ -145,10 +147,10 @@ function renderCircuitInfo() {
   renderTyreSetup();
 }
 function renderTeams() {
-  const sorted = [...TEAMS].sort((a, b) => b.points - a.points);
+  const sorted = [...TEAMS].sort((a, b) => b.pace - a.pace);
   $('#teamGrid').innerHTML = sorted.map(t => `<div class="team-card ${t === setup.team ? 'sel' : ''}" data-id="${t.id}">
     <div class="stripe" style="background:${t.color}"></div>
-    <div class="tn">${t.name}</div><div class="td">${t.drivers.map(d => d.code).join(' / ')} · ${t.points}pt</div>
+    <div class="tn">${t.name}</div><div class="td">${t.drivers.map(d => d.code).join(' / ')} · 今季 ${t.points}pt</div>
     <div class="pace"><i style="width:${Math.round((t.pace - 0.5) * 200)}%"></i></div></div>`).join('');
   document.querySelectorAll('.team-card').forEach(el => el.onclick = () => { setup.team = TEAMS.find(t => t.id === el.dataset.id); renderTeams(); renderTyreSetup(); });
 }
@@ -197,6 +199,11 @@ function startRace() {
   R.cars.forEach(car => car.curLT = lapTime(car));
   showScreen('race');
   buildRaceUI();
+  R.is3d = false;
+  if (window.THREE) { try { V3.init($('#view3d'), R); R.is3d = true; } catch (e) { console.warn('3D init failed', e); } }
+  $('#trackWrap').classList.toggle('is3d', R.is3d);
+  $('#camBar').style.display = R.is3d ? '' : 'none';
+  resizeCanvas(); if (R.is3d) V3.resize();
   addLog(`<b>${c.name}</b> スタート！ 天候データ: ${R.wx.year}年`);
   event('ライツアウト！', '#e10600');
   lastFrame = performance.now();
@@ -321,11 +328,11 @@ function tick(dt) {
   R.rainNow = rainAt(frac);
   if (R.rainNow > R.wet) R.wet += (R.rainNow - R.wet) * dt / 70;
   else R.wet = Math.max(R.rainNow, R.wet - dt / 1100);
-  if (prevRain < 0.05 && R.rainNow >= 0.05) { event('雨が降り始めた', '#2f7dff'); addLog('🌧️ <b>雨</b>が降り始めました'); playerRadio(pick(RADIO.rain).replace('{n}', Math.ceil(rnd(1, 15)))); }
-  if (prevRain >= 0.05 && R.rainNow < 0.05) { event('雨が止んだ', '#ffd400'); addLog('🌤️ 雨が止みました'); }
+  if (prevRain < 0.05 && R.rainNow >= 0.05) { event('雨が降り始めた', '#2f7dff', true); addLog('🌧️ <b>雨</b>が降り始めました'); playerRadio(pick(RADIO.rain).replace('{n}', Math.ceil(rnd(1, 15)))); }
+  if (prevRain >= 0.05 && R.rainNow < 0.05) { event('雨が止んだ', '#ffd400', true); addLog('🌤️ 雨が止みました'); }
   if (R.rainNow > 0.6 && prevRain <= 0.6) playerRadio(pick(RADIO.rainHeavy));
   if (R._wetIdeal !== idealTyre(R.wet)) {
-    if (R._wetIdeal) { const t = idealTyre(R.wet); addLog(`路面: <b>${t === 'dry' ? 'スリック' : COMPOUNDS[t].jp}</b>コンディション`); event(`路面: ${t === 'dry' ? 'スリック' : COMPOUNDS[t].jp}コンディション`, '#2fd34a'); if (t === 'dry') playerRadio(pick(RADIO.drying)); }
+    if (R._wetIdeal) { const t = idealTyre(R.wet); addLog(`路面: <b>${t === 'dry' ? 'スリック' : COMPOUNDS[t].jp}</b>コンディション`); event(`路面: ${t === 'dry' ? 'スリック' : COMPOUNDS[t].jp}コンディション`, '#2fd34a', true); if (t === 'dry') playerRadio(pick(RADIO.drying)); }
     R._wetIdeal = idealTyre(R.wet);
   }
 
@@ -436,8 +443,8 @@ function playerChecks(car) {
   const mm = tyreMismatch(car);
   if (mm >= 1) { car.mismatchLaps++; if (car.mismatchLaps === 1 || car.mismatchLaps % 3 === 0) { radio(car, mm >= 2 ? pick(RADIO.rainHeavy) : idealTyre(R.wet) === 'dry' ? pick(RADIO.drying) : 'このタイヤじゃ合わない、交換しよう', true); event(`${car.d.code}: タイヤが路面に合っていない`, '#ffd400'); } }
   else car.mismatchLaps = 0;
-  if (car.wear > 70 && !car._warned70) { car._warned70 = true; radio(car, pick(RADIO.tyresGone)); event(`${car.d.code}: タイヤ摩耗 ${Math.round(car.wear)}%`, '#ff8a1f'); }
-  if (car.wear > 85 && !car._warned85) { car._warned85 = true; if (car.d.temper > 0.5) radio(car, pick(RADIO.complainStrat), true); else radio(car, pick(RADIO.tyresGone), true); event(`${car.d.code}: タイヤの崖！`, '#e10600'); }
+  if (car.wear > 70 && !car._warned70) { car._warned70 = true; radio(car, pick(RADIO.tyresGone)); event(`${car.d.code}: ピットの検討タイミング（摩耗 ${Math.round(car.wear)}%）`, '#ff8a1f', true); }
+  if (car.wear > 85 && !car._warned85) { car._warned85 = true; if (car.d.temper > 0.5) radio(car, pick(RADIO.complainStrat), true); else radio(car, pick(RADIO.tyresGone), true); event(`${car.d.code}: タイヤの崖！`, '#e10600', true); }
   // ドライバーの性格：戦略眼のあるドライバーは自分から提案
   if (car.d.quirk.includes('提案') && car.wear > 60 && Math.random() < 0.2 && !car.box) radio(car, 'そろそろボックスしたほうがいいと思う');
   if (car.d.temper > 0.7 && car.stuck > 0 && Math.random() < 0.08) radio(car, 'アンダーカットを狙おう、早く入れてくれ！');
@@ -478,7 +485,7 @@ function pitEnter(car) {
   car.dist = car.lap * R.L; // ピットはコントロールライン上で処理
   if (car.player) {
     addLog(`🔧 <b>${car.d.code}</b> ピットイン → ${COMPOUNDS[car.newTyre].jp}`);
-    event(`${car.d.code} BOX BOX`, car.team.color);
+    event(`${car.d.code} BOX BOX`, car.team.color, true);
     car._pitAnimStart = R.time;
   }
 }
@@ -524,21 +531,21 @@ function deploySC(type) {
   else R.sc = { type, until: R.leaderLap + laps, fresh: true };
   R.scCar = 0;
   addLog(`🚨 <b>${type === 'SC' ? 'セーフティカー' : 'バーチャル・セーフティカー'}</b>（約${laps}周）`);
-  event(type === 'SC' ? 'SAFETY CAR' : 'VIRTUAL SAFETY CAR', '#ffd400');
+  event(type === 'SC' ? 'SAFETY CAR' : 'VIRTUAL SAFETY CAR', '#ffd400', true);
   R.cars.filter(c => c.player && !c.out).forEach(c => { if (Math.random() < 0.6) radio(c, pick(RADIO.sc), true); });
   R.cars.forEach(c => { if (!c.out && !c.finished && c.pitTimer <= 0) c.curLT = lapTime(c); });
   R._scFreshLap = R.leaderLap;
 }
 function endSC() {
   addLog(`🟢 ${R.sc.type} 終了、グリーンフラッグ`);
-  event(R.sc.type === 'SC' ? 'SC IN THIS LAP → GREEN' : 'VSC ENDING → GREEN', '#2fd34a');
+  event(R.sc.type === 'SC' ? 'SC IN THIS LAP → GREEN' : 'VSC ENDING → GREEN', '#2fd34a', true);
   R.sc = null;
   R.cars.forEach(c => { if (!c.out && !c.finished && c.pitTimer <= 0) c.curLT = lapTime(c); });
 }
 function checkCompoundRule() {
   if (R.anyWet) return;
   R.cars.filter(c => c.player && !c.out).forEach(c => {
-    if ([...c.used].filter(isDry).length < 2) { radio(c, '2種類目のコンパウンドをまだ使ってないぞ！', true); event(`${c.d.code}: 2コンパウンド義務 未消化`, '#e10600'); }
+    if ([...c.used].filter(isDry).length < 2) { radio(c, '2種類目のコンパウンドをまだ使ってないぞ！', true); event(`${c.d.code}: 2コンパウンド義務 未消化`, '#e10600', true); }
   });
 }
 
@@ -549,7 +556,7 @@ function finishRace() {
   res.forEach(c => { if (!c.out && !R.anyWet && [...c.used].filter(isDry).length < 2) { c.dsq = true; } });
   const classified = res.filter(c => !c.out && !c.dsq);
   classified.forEach((c, i) => { c.pos = i + 1; c.pts = POINTS[i] || 0; champ[c.d.code] = (champ[c.d.code] || 0) + c.pts; });
-  store.set('points', champ);
+  store.set('champ26', champ);
   roundIdx = CIRCUITS.indexOf(R.c) + 1; store.set('round', roundIdx);
   R.cars.filter(c => c.player).forEach(c => {
     if (c.out || c.dsq) return;
@@ -582,15 +589,14 @@ function radio(car, text, important) {
     ttsQueue++; u.onend = u.onerror = () => ttsQueue--;
     speechSynthesis.speak(u);
   }
-  slowDown();
 }
 function playerRadio(text) { const c = R.cars.find(c => c.player && !c.out && !c.finished); if (c) radio(c, text); }
 function slowDown() { if (R && R.autoSlow && R.target > 1) R.slowUntil = performance.now() + 5000; }
-function event(text, color) {
+function event(text, color, slow) {
   const b = $('#eventBanner'); if (!b) return;
   b.textContent = text; b.style.display = 'block'; b.style.background = color; b.style.color = ['#fff', '#ffd400', '#2fd34a', '#ff8a1f'].includes(color) || color.startsWith('#e8') ? '#000' : '#fff';
   clearTimeout(event._t); event._t = setTimeout(() => b.style.display = 'none', 2600);
-  slowDown();
+  if (slow) slowDown();
 }
 function addLog(html) {
   const lap = R ? `L${R.leaderLap}` : '';
@@ -604,6 +610,14 @@ function addLog(html) {
 function buildRaceUI() {
   $('#speedBar').innerHTML = SPEEDS.map(s => `<button data-s="${s}" class="${s === R.target ? 'sel' : ''}">${s}x</button>`).join('') + '<span class="cur" id="curSpeed"></span>';
   $('#speedBar').querySelectorAll('button').forEach(b => b.onclick = () => { R.target = +b.dataset.s; R.slowUntil = 0; $('#speedBar').querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b)); });
+  const pl = R.cars.filter(c => c.player).sort((a, b) => a.pIdx - b.pIdx);
+  const cams = [['top', '俯瞰'], ['heli', 'ヘリ'], ['tv', '中継'], ['chase', '1台追尾']];
+  const foc = [['p0', pl[0].d.code], ['p1', pl[1].d.code], ['leader', 'トップ']];
+  $('#camBar').innerHTML = cams.map(([k, l]) => `<button data-cam="${k}" class="${k === 'chase' ? 'sel' : ''}">${l}</button>`).join('') + '<span class="sep"></span>' +
+    foc.map(([k, l]) => `<button data-foc="${k}" class="${k === 'p0' ? 'sel' : ''}">${l}</button>`).join('');
+  $('#camBar').querySelectorAll('[data-cam]').forEach(b => b.onclick = () => { V3.setMode(b.dataset.cam); $('#camBar').querySelectorAll('[data-cam]').forEach(x => x.classList.toggle('sel', x === b)); });
+  $('#camBar').querySelectorAll('[data-foc]').forEach(b => b.onclick = () => setFocus(b.dataset.foc));
+  $('#tower').onclick = e => { const row = e.target.closest('.trow'); if (row && R.is3d) setFocus('code:' + row.dataset.code); };
   $('#btnPause').onclick = () => { R.paused = !R.paused; $('#btnPause').textContent = R.paused ? '▶' : '⏸'; };
   $('#btnRadioToggle').onclick = () => { R.radioOn = !R.radioOn; $('#btnRadioToggle').style.opacity = R.radioOn ? 1 : 0.4; if (!R.radioOn) speechSynthesis && speechSynthesis.cancel(); };
   $('#btnRadioToggle').style.opacity = R.radioOn ? 1 : 0.4;
@@ -634,11 +648,17 @@ function buildRaceUI() {
   });
   resizeCanvas();
 }
+function setFocus(f) {
+  if (!R.is3d) return;
+  V3.setFocus(f); R.focus = f;
+  $('#camBar').querySelectorAll('[data-foc]').forEach(x => x.classList.toggle('sel', x.dataset.foc === f));
+}
 function resizeCanvas() {
   const cv = $('#trackCanvas'); const r = cv.getBoundingClientRect(); const dpr = Math.min(2, window.devicePixelRatio || 1);
-  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.width * 0.75 * dpr);
+  cv.width = Math.round(r.width * dpr); cv.height = Math.round((R && R.is3d ? r.width : r.width * 0.75) * dpr);
+  if (R) R._mmKey = null;
 }
-window.addEventListener('resize', () => { if (R && !R.finished) resizeCanvas(); });
+window.addEventListener('resize', () => { if (R && !R.finished) { resizeCanvas(); if (R.is3d) V3.resize(); } });
 
 let uiTick = 0;
 function updateUI() {
@@ -668,7 +688,7 @@ function updateUI() {
     }
     if (car.pitTimer > 0) g = 'PIT';
     const t = COMPOUNDS[car.tyre];
-    return `<div class="trow ${car.player ? 'me' : ''} ${car.out ? 'out' : ''}"><span class="p">${i + 1}</span><span class="c" style="background:${car.team.color}"></span>
+    return `<div class="trow ${car.player ? 'me' : ''} ${car.out ? 'out' : ''} ${R.focus === 'code:' + car.d.code ? 'focus' : ''}" data-code="${car.d.code}"><span class="p">${i + 1}</span><span class="c" style="background:${car.team.color}"></span>
       <span class="cd">${car.d.code}</span><span class="g">${g}</span><span class="tdot" style="border-color:${t.color};color:${t.color}">${car.age}</span></div>`;
   }).join('');
 
@@ -740,10 +760,17 @@ function drawPitAnim(car) {
 }
 
 function drawRace() {
+  const ord = order();
+  if (R.is3d) V3.render(R, ord, $('#labels'));
   const cv = $('#trackCanvas'); const ctx = cv.getContext('2d'); const w = cv.width, h = cv.height;
   const c = R.c;
-  const { sx, sy, tw } = drawTrack(ctx, w, h, c, R.track, { wet: R.wet });
-  const ord = order();
+  const key = `${w}x${h}:${Math.round(R.wet * 10)}`;
+  if (R._mmKey !== key) {
+    R._mmKey = key; R._mm = document.createElement('canvas'); R._mm.width = w; R._mm.height = h;
+    R._mmGeo = drawTrack(R._mm.getContext('2d'), w, h, c, R.track, { wet: R.wet, mini: R.is3d });
+  }
+  ctx.drawImage(R._mm, 0, 0);
+  const { sx, sy, tw } = R._mmGeo;
   // 車
   [...ord].reverse().forEach((car, ri) => {
     if (car.out) return;
@@ -768,7 +795,7 @@ function drawRace() {
   }
   if (R.sc && R.sc.type === 'VSC') { ctx.fillStyle = 'rgba(255,200,0,.12)'; ctx.fillRect(0, 0, w, h); }
   // 雨
-  if (R.rainNow > 0.02) {
+  if (R.rainNow > 0.02 && !R.is3d) {
     ctx.strokeStyle = `rgba(180,200,255,${0.25 + R.rainNow * 0.4})`; ctx.lineWidth = 1;
     const n = Math.round(R.rainNow * 260); const t = performance.now() / 4;
     ctx.beginPath();
@@ -795,7 +822,10 @@ function showPodium(res, classified) {
     }).join('')}</table>`;
   $('#btnNext').onclick = () => { setup.circuit = CIRCUITS[roundIdx % CIRCUITS.length]; showScreen('setup'); renderSetup(); };
   $('#btnToStandings').onclick = openStandings;
-  podiumAnim(top);
+  if (R.is3d) V3.dispose();
+  let ok3d = false;
+  if (window.THREE) { try { V3.podium($('#podiumCanvas'), top, R.c); ok3d = true; } catch (e) { console.warn(e); } }
+  if (!ok3d) podiumAnim(top);
 }
 function podiumAnim(top) {
   const cv = $('#podiumCanvas');
@@ -877,7 +907,7 @@ function renderStandings(tab) {
 document.querySelectorAll('.tabs [data-tab]').forEach(b => b.onclick = () => renderStandings(b.dataset.tab));
 $('#closeStandings').onclick = () => $('#standingsModal').classList.add('hidden');
 $('#btnStandings').onclick = openStandings;
-$('#btnReset').onclick = () => { const b = $('#btnReset'); if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'もう一度タップでリセット'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'シーズンをリセット'; }, 3000); return; } delete b.dataset.armed; b.textContent = 'シーズンをリセット'; { champ = { ...START_POINTS }; roundIdx = 0; store.set('points', champ); store.set('round', 0); computePace(); setup.circuit = CIRCUITS[0]; renderSetup(); } };
+$('#btnReset').onclick = () => { const b = $('#btnReset'); if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'もう一度タップでリセット'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'シーズンをリセット'; }, 3000); return; } delete b.dataset.armed; b.textContent = 'シーズンをリセット'; { champ = zeroPoints(); roundIdx = 0; store.set('champ26', champ); store.set('round', 0); computePace(); setup.circuit = CIRCUITS[0]; renderSetup(); } };
 $('#btnStart').onclick = startRace;
 
 function showScreen(id) { document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === id)); window.scrollTo(0, 0); }

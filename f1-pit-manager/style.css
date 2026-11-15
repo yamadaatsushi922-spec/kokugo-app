@@ -133,3 +133,17 @@ tr.me td { background: #2a1d1d; }
 .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
 .tabs button.active { background: var(--accent); border-color: var(--accent); }
 .tabs .close { margin-left: auto; }
+
+/* ---------- 3D ---------- */
+#camBar { display: flex; gap: 4px; padding: 0 12px 6px; overflow-x: auto; background: #07080b; align-items: center; }
+#camBar button { padding: 4px 8px; font-size: 12px; flex: none; }
+#camBar button.sel { background: #fff; color: #000; }
+#camBar .sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; flex: none; }
+#view3d { display: none; width: 100%; aspect-ratio: 16 / 11; max-height: 70vh; }
+#labels { display: none; position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+#trackWrap.is3d #view3d, #trackWrap.is3d #labels { display: block; }
+#trackWrap.is3d #trackCanvas { position: absolute; top: 8px; right: 8px; width: 30%; aspect-ratio: 1; border-radius: 8px;
+  border: 1px solid rgba(255,255,255,.25); opacity: .92; }
+#trackWrap.is3d #eventBanner { top: 44px; }
+.trow { cursor: pointer; }
+.trow.focus { outline: 1px solid #fff; }
