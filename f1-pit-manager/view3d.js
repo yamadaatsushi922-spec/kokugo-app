@@ -29,9 +29,27 @@ const V3 = (() => {
     const r = rng(hashStr(c.id));
     const ph = [r() * 6.28, r() * 6.28, r() * 6.28];
     const amp = ELEV[c.id] ?? 8;
-    const elev = f => amp * 0.5 * (Math.sin(2 * Math.PI * f + ph[0]) + 0.5 * Math.sin(4 * Math.PI * f + ph[1]) + 0.25 * Math.sin(6 * Math.PI * f + ph[2])) / 1.75;
+    const baseElev = f => amp * 0.5 * (Math.sin(2 * Math.PI * f + ph[0]) + 0.5 * Math.sin(4 * Math.PI * f + ph[1]) + 0.25 * Math.sin(6 * Math.PI * f + ph[2])) / 1.75;
+    // 立体交差（鈴鹿のクロスオーバーなど）：コースが自分自身と交差する場所を探し、後から通る側を橋として持ち上げる
+    const bridges = [];
+    {
+      const K = 900, pp = []; for (let i = 0; i < K; i++) { const q = track.at(i / K); pp.push([q[0], q[1]]); }
+      for (let i = 0; i < K; i++) for (let j = i + 25; j < K; j++) {
+        if (i === 0 && j > K - 25) continue;
+        const [x1, y1] = pp[i], [x2, y2] = pp[(i + 1) % K], [x3, y3] = pp[j], [x4, y4] = pp[(j + 1) % K];
+        const d = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3); if (Math.abs(d) < 1e-9) continue;
+        const t = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / d, u = ((x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1)) / d;
+        if (t < 0 || t >= 1 || u < 0 || u >= 1) continue;
+        const cosA = Math.abs(((x2 - x1) * (x4 - x3) + (y2 - y1) * (y4 - y3)) / (Math.hypot(x2 - x1, y2 - y1) * Math.hypot(x4 - x3, y4 - y3) || 1));
+        if (cosA > 0.87) continue; // 浅い角度の接近は交差とみなさない
+        bridges.push({ f: (j + u) / K, f0: (i + t) / K });
+      }
+    }
+    const BRIDGE_H = 9, BRIDGE_W = 0.016;
+    const bump = f => { let h = 0; for (const b of bridges) { let d = Math.abs(f - b.f); d = Math.min(d, 1 - d); if (d < BRIDGE_W) h = Math.max(h, 0.5 * (1 + Math.cos(Math.PI * d / BRIDGE_W))); } return h; };
+    const elev = f => { f = ((f % 1) + 1) % 1; let h = baseElev(f); for (const b of bridges) { const ref = baseElev(b.f0); /* 下を通る道との差を確保 */ h += 0; } return h + BRIDGE_H * bump(f); };
     const pos = f => { const [x, y, a] = track.at(f); return { x: (x - 50) * scale, z: (y - 50) * scale, a, y: elev(((f % 1) + 1) % 1) }; };
-    return { scale, elev, pos, amp };
+    return { scale, elev, pos, amp, bridges, bump, BRIDGE_H };
   }
 
   function ribbon(G, fromF, toF, steps, offIn, offOut, y, colorFn) {
@@ -281,6 +299,21 @@ const V3 = (() => {
     const road = new THREE.Mesh(ribbon(G, 0, 1, N, -TRACK_W / 2, TRACK_W / 2, 0.1), asphalt);
     scene.add(road);
 
+    // 立体交差の橋脚と欄干
+    {
+      const pierMat = new THREE.MeshStandardMaterial({ color: 0xb9bcc2, roughness: 0.85 });
+      G.bridges.forEach(b => {
+        for (let k = -8; k <= 8; k += 2) {
+          const f = b.f + k / 8 * 0.016 * 0.92, p = G.pos(f), hh = G.BRIDGE_H * G.bump(f);
+          if (hh < 1.2) continue;
+          [1, -1].forEach(sd => {
+            const pier = new THREE.Mesh(new THREE.BoxGeometry(2, hh, 2), pierMat);
+            pier.position.set(p.x - Math.sin(p.a) * (TRACK_W / 2 - 1) * sd, p.y - hh / 2, p.z + Math.cos(p.a) * (TRACK_W / 2 - 1) * sd);
+            pier.rotation.y = -p.a; scene.add(pier);
+          });
+        }
+      });
+    }
     // スタートライン
     const chk = canvasTex(64, 16, (x, w, h) => { for (let i = 0; i < 16; i++) for (let j = 0; j < 4; j++) { x.fillStyle = (i + j) % 2 ? '#000' : '#fff'; x.fillRect(i * 4, j * 4, 4, 4); } });
     const p0 = G.pos(0);
