@@ -463,13 +463,16 @@ function tick(dt) {
     if (gap >= minGap) { if (gT > 1.2) b.stuck = 0; continue; }
     if (b.passing === a && R.time < b.passUntil) continue;
     const faster = a.curLT - b.curLT;
-    if (!R.sc && faster > 0.05 * (R.c.baseLap / 90) && b.cooldown <= 0 && !R.yellow) {
+    if (!R.sc && faster > 0.15 * (R.c.baseLap / 90) && b.cooldown <= 0 && !R.yellow) {
       b.cooldown = b.curLT * 0.33;
       const s = R.c.baseLap / 90;
       let p = 0.12 + (faster / s) * 0.3 + (b.d.ovt - 0.75) * 0.7 + (b.ovMode ? 0.12 : 0) - R.c.ovt * 0.28 - (a.d.ovt - 0.75) * 0.3;
-      p *= 0.8 + b.d.aggr * 0.4;
+      p *= (0.8 + b.d.aggr * 0.4) * (1.15 - R.c.ovt * 0.9); // 抜きにくいコース（モナコ等）ほど成功率が下がる
       if (Math.random() < clamp(p, 0.015, 0.85)) {
-        b.passing = a; b.passUntil = R.time + 2.5; b.stuck = 0;
+        // 成功したら実際に前へ出る（以前はフラグだけで位置が入れ替わらなかった）
+        b.dist = a.dist + 6; a.cooldown = Math.max(a.cooldown, a.curLT * 0.12);
+        b.passing = a; b.passUntil = R.time + 2.5; b.stuck = 0; R.passes = (R.passes || 0) + 1;
+        if (a.player || b.player) addLog(`⚔️ <b>${b.d.code}</b> が <b>${a.d.code}</b> をオーバーテイク`);
         if (b.player) radio(b, pick(RADIO.pass));
         if (a.player && Math.random() < 0.6) radio(a, pick(RADIO.passed));
         // 接触リスク
