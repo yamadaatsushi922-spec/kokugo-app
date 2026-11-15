@@ -237,7 +237,7 @@ function startRace() {
   const wetStart = setup.weather.rain.find(r => r.s <= 0.02);
   R = {
     c, L, prof, track: c._track, wx: setup.weather, time: 0, leaderLap: 0, checkered: false, finished: false,
-    sc: null, scCar: 0, wet: wetStart ? wetStart.i * 0.9 : 0, rainNow: 0, target: SPEEDS.includes(prefs.speed) ? prefs.speed : 10, slowUntil: 0, paused: false,
+    sc: null, scCar: 0, wet: wetStart ? wetStart.i * 0.9 : 0, rainNow: 0, target: 1, slowUntil: 0, paused: false,
     radioOn: $('#optRadio').checked, autoSlow: $('#optAutoSlow').checked, finishOrder: [], yellow: 0, log: [],
     cars: grid.map((d, i) => {
       const player = d.team === setup.team;
@@ -261,7 +261,7 @@ function startRace() {
   $('#camBar').style.display = R.is3d ? '' : 'none';
   resizeCanvas(); if (R.is3d) V3.resize();
   addLog(`<b>${c.name}</b> スタート！ 天候データ: ${R.wx.year}年`);
-  // グリッド → 5連ライト → ライツアウト。スタート直後（1周目）は1倍速固定
+  // グリッド → 5連ライト → ライツアウト。レース開始時の倍速は常に1倍（その後は自由に変更可）
   R.phase = 'grid'; R.gridT = 0; R.holdT = rnd(0.5, 2.6);
   addLog('🚦 グリッドに整列。まもなくスタート');
   buildLights();
@@ -346,7 +346,7 @@ function wearPerLap(car) {
 
 // ---------- メインループ ----------
 let lastFrame = 0;
-function effectiveSpeed() { return R.phase === 'grid' || R.leaderLap < 1 || performance.now() < R.slowUntil ? 1 : R.target; }
+function effectiveSpeed() { return R.phase === 'grid' || performance.now() < R.slowUntil ? 1 : R.target; }
 
 // ---- スタートライト ----
 const LIGHT_T0 = 3.0; // グリッドを見せる秒数
@@ -696,7 +696,7 @@ function addLog(html) {
 // =============================================================
 function buildRaceUI() {
   $('#speedBar').innerHTML = SPEEDS.map(s => `<button data-s="${s}" class="${s === R.target ? 'sel' : ''}">${s}x</button>`).join('') + '<span class="cur" id="curSpeed"></span>';
-  $('#speedBar').querySelectorAll('button').forEach(b => b.onclick = () => { R.target = +b.dataset.s; R.slowUntil = 0; prefs.speed = R.target; savePrefs(); $('#speedBar').querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b)); });
+  $('#speedBar').querySelectorAll('button').forEach(b => b.onclick = () => { R.target = +b.dataset.s; R.slowUntil = 0; $('#speedBar').querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b)); });
   const pl = R.cars.filter(c => c.player).sort((a, b) => a.pIdx - b.pIdx);
   const cams = [['top', '俯瞰'], ['heli', 'ヘリ'], ['tv', '中継'], ['chase', '1台追尾']];
   const foc = [['p0', pl[0].d.code], ['p1', pl[1].d.code], ['leader', 'トップ']];
@@ -758,7 +758,7 @@ function updateUI() {
   else { f.className = 'flag green'; f.textContent = 'GREEN'; }
   const rainTxt = R.rainNow > 0.6 ? '🌧️ 強い雨' : R.rainNow > 0.25 ? '🌧️ 雨' : R.rainNow > 0.03 ? '🌦️ 小雨' : '☀️ 晴れ';
   $('#weatherInfo').innerHTML = `${rainTxt}　路面 ${R.wet < 0.05 ? 'ドライ' : R.wet < 0.13 ? 'ダンプ' : R.wet < 0.55 ? 'ウェット' : 'ヘビーウェット'}（${Math.round(R.wet * 100)}%）<br>${c.name}`;
-  $('#curSpeed').textContent = R.phase === 'grid' ? 'グリッド' : R.leaderLap < 1 ? '1周目は1x固定' : `実行 ${effectiveSpeed()}x`;
+  $('#curSpeed').textContent = R.phase === 'grid' ? 'グリッド' : `実行 ${effectiveSpeed()}x`;
   if (uiTick++ % 6) return; // 以下は重いので間引き
 
   const refSp = R.L / c.baseLap;
