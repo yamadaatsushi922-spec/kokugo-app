@@ -261,7 +261,10 @@ function startRace() {
   $('#camBar').style.display = R.is3d ? '' : 'none';
   resizeCanvas(); if (R.is3d) V3.resize();
   addLog(`<b>${c.name}</b> スタート！ 天候データ: ${R.wx.year}年`);
-  event('ライツアウト！', '#e10600');
+  // グリッド → 5連ライト → ライツアウト。スタート直後（1周目）は1倍速固定
+  R.phase = 'grid'; R.gridT = 0; R.holdT = rnd(0.5, 2.6);
+  addLog('🚦 グリッドに整列。まもなくスタート');
+  buildLights();
   lastFrame = performance.now();
   requestAnimationFrame(loop);
 }
@@ -323,7 +326,6 @@ function lapTime(car) {
   lt += car.mode === 'push' ? -0.32 * s : car.mode === 'save' ? 0.5 * s : 0;
   lt += car.ovMode ? -0.22 * s : 0;
   lt += gauss() * (0.1 + (1 - d.cons) * 0.55) * s;
-  if (car.lap === 0) lt += 4.5 * s + (car.grid - 1) * 0.12;   // スタンディングスタート
   if (R.sc && R.sc.type === 'VSC') lt = Math.max(lt, c.baseLap * 1.36);
   return lt;
 }
@@ -344,12 +346,36 @@ function wearPerLap(car) {
 
 // ---------- メインループ ----------
 let lastFrame = 0;
-function effectiveSpeed() { return performance.now() < R.slowUntil ? 1 : R.target; }
+function effectiveSpeed() { return R.phase === 'grid' || R.leaderLap < 1 || performance.now() < R.slowUntil ? 1 : R.target; }
+
+// ---- スタートライト ----
+const LIGHT_T0 = 3.0; // グリッドを見せる秒数
+function buildLights() {
+  const box = $('#startLights');
+  box.innerHTML = '<div class="lamps">' + '<i></i>'.repeat(5) + '</div><div class="msg">LIGHTS OUT まで</div><button id="skipStart">スキップ ▶▶</button>';
+  box.style.display = 'flex';
+  $('#skipStart').onclick = () => { R.gridT = Math.max(R.gridT, LIGHT_T0 + 5 + R.holdT - 0.01); };
+}
+function updateLights(dt) {
+  R.gridT += dt;
+  const t = R.gridT - LIGHT_T0, n = t < 0 ? 0 : Math.min(5, Math.floor(t) + 1);
+  const lamps = document.querySelectorAll('#startLights .lamps i');
+  const out = t >= 5 + R.holdT;
+  lamps.forEach((el, i) => el.classList.toggle('on', !out && i < n));
+  const msg = $('#startLights .msg');
+  if (msg) msg.textContent = out ? '' : t < 0 ? `グリッド（あと${Math.ceil(-t)}秒でライト点灯）` : n < 5 ? 'READY…' : 'LIGHTS OUT まで…';
+  if (out) {
+    R.phase = 'race'; $('#startLights').style.display = 'none';
+    event('LIGHTS OUT — GO GO GO!', '#e10600'); addLog('🟢 <b>ライツアウト！</b> レーススタート');
+    R.cars.forEach(c => c.startV = 0);
+  }
+}
 function loop(now) {
   if (!R || R.finished) return;
   const realDt = Math.min(0.1, (now - lastFrame) / 1000);
   lastFrame = now;
-  if (!R.paused) {
+  if (R.phase === 'grid') { if (!R.paused) updateLights(realDt); }
+  else if (!R.paused) {
     let simDt = realDt * effectiveSpeed();
     const step = 0.2;
     let guard = 0;
@@ -368,13 +394,12 @@ function order() {
   return [...R.cars].sort((a, b) => {
     if (a.out !== b.out) return a.out ? 1 : -1;
     if (a.out && b.out) return b.dist - a.dist;
+    // 完走済みは「ゴール時の周回数」、走行中は現在の走行距離で比較（周回遅れの車がリードラップの車より前に来ない）
+    const ka = a.finished ? a.lap * R.L : a.dist, kb = b.finished ? b.lap * R.L : b.dist;
+    if (ka !== kb) return kb - ka;
     if (a.finished && b.finished) return a.finishRank - b.finishRank;
-    if (a.finished !== b.finished) { // 完走者はゴールした周回数で比較
-      const fa = a.finished ? R.c.laps : Math.floor(a.dist / R.L), fb = b.finished ? R.c.laps : Math.floor(b.dist / R.L);
-      if (fa !== fb) return fb - fa;
-      return a.finished ? -1 : 1;
-    }
-    return b.dist - a.dist;
+    if (a.finished !== b.finished) return a.finished ? -1 : 1;
+    return 0;
   });
 }
 
@@ -415,6 +440,7 @@ function tick(dt) {
       const gT = (ord[i - 1].dist - car.dist) / sp;
       if (ord[i - 1].pitTimer <= 0 && gT > 1.0 && gT < R.c.baseLap * 0.8) sp *= 1.35;
     }
+    if (car.lap === 0) { car.startV = (car.startV || 0) + 10 * dt; sp = Math.min(sp, car.startV); } // 停止状態からの発進加速
     car.dist += sp * dt;
     // エネルギー（自動デプロイ＆回生）
     if (car.ovMode) car.energy = Math.max(0, car.energy - dt * 1.6);
@@ -732,7 +758,7 @@ function updateUI() {
   else { f.className = 'flag green'; f.textContent = 'GREEN'; }
   const rainTxt = R.rainNow > 0.6 ? '🌧️ 強い雨' : R.rainNow > 0.25 ? '🌧️ 雨' : R.rainNow > 0.03 ? '🌦️ 小雨' : '☀️ 晴れ';
   $('#weatherInfo').innerHTML = `${rainTxt}　路面 ${R.wet < 0.05 ? 'ドライ' : R.wet < 0.13 ? 'ダンプ' : R.wet < 0.55 ? 'ウェット' : 'ヘビーウェット'}（${Math.round(R.wet * 100)}%）<br>${c.name}`;
-  $('#curSpeed').textContent = `実行 ${effectiveSpeed()}x`;
+  $('#curSpeed').textContent = R.phase === 'grid' ? 'グリッド' : R.leaderLap < 1 ? '1周目は1x固定' : `実行 ${effectiveSpeed()}x`;
   if (uiTick++ % 6) return; // 以下は重いので間引き
 
   const refSp = R.L / c.baseLap;
