@@ -6,7 +6,7 @@ const V3 = (() => {
   // サーキットごとの高低差（m）の目安
   const ELEV = { AUS: 3, CHN: 6, JPN: 30, BHR: 10, SAU: 4, MIA: 3, CAN: 4, MON: 28, ESP: 22, AUT: 45, GBR: 9, BEL: 48, HUN: 22, NED: 18, ITA: 6, MAD: 12, AZE: 20, SIN: 3, USA: 32, MEX: 6, BRA: 30, LVG: 2, QAT: 4, ABU: 4 };
   const N = 2400;           // コースのサンプル数
-  const TRACK_W = 14;       // コース幅 (m)
+  let TRACK_W = 14;         // コース幅 (m)。サーキットごとに init() で設定
   const PIT_OFF = 24;       // ピットレーンのオフセット (m)
   let S = null;             // 現在のシーン状態
 
@@ -236,6 +236,7 @@ const V3 = (() => {
   function init(container, R) {
     dispose();
     const c = R.c;
+    TRACK_W = c.width || 14;
     const G = makeGeo(c, R.track, R.L);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(1.75, window.devicePixelRatio || 1));
@@ -494,15 +495,10 @@ const V3 = (() => {
     }
     const f = car.dist / R.L;
     const p = G.pos(f), p2 = G.pos(f + 4 / R.L);
-    // 並走時の横方向オフセット
-    const m = S.cars.get(car);
-    let target = 0;
-    if (car.passing && R.time < car.passUntil) target = 3.2 * (idx % 2 ? 1 : -1);
-    else if (car.gapAhead < 0.35) target = 1.4 * (idx % 2 ? 1 : -1);
-    if (R.dist0 === undefined && car.lap === 0 && car.dist < 0) target = (car.grid % 2 ? -3 : 3);
-    m.userData.lat += (target - m.userData.lat) * 0.08;
-    const lat = m.userData.lat;
-    return { x: p.x - Math.sin(p.a) * lat, y: p.y + 0.1, z: p.z + Math.cos(p.a) * lat, a: p.a, slope: Math.atan2(p2.y - p.y, 4) };
+    // 横位置はシミュレーション側のライン取り（スリップ・仕掛け・ディフェンス）をそのまま使う
+    const lat = car.lat || 0;
+    const yaw = Math.atan2(car.latV || 0, Math.max(10, typeof spAt === 'function' ? spAt(car) : 50)); // 横移動中は車体を少し振る
+    return { x: p.x - Math.sin(p.a) * lat, y: p.y + 0.1, z: p.z + Math.cos(p.a) * lat, a: p.a, yaw, slope: Math.atan2(p2.y - p.y, 4) };
   }
 
   function focusCar(R, ord) {
@@ -533,7 +529,7 @@ const V3 = (() => {
       if (car.out) { if (!car._parked) { car._parked = carPlace(R, car, i); } const p = car._parked; m.position.set(p.x - Math.sin(p.a) * 12, p.y, p.z + Math.cos(p.a) * 12); m.rotation.set(0, -p.a + 0.9, 0); m.scale.setScalar(carScale); return; }
       const p = carPlace(R, car, i);
       m.position.set(p.x, p.y, p.z);
-      m.rotation.set(0, -p.a, p.slope);
+      m.rotation.set(0, -(p.a + (p.yaw || 0)), p.slope);
       m.scale.setScalar(carScale);
       const spin = car.pitTimer > 0 && car._lastPitSpin ? 0 : (R.L / car.curLT) * 0.05;
       m.userData.wheels.forEach(w => w.rotation.z -= spin);

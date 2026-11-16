@@ -94,10 +94,10 @@ function buildTrack(shape) {
 function makeProfile(track, L) {
   const K = 2400, ds = L / K, ang = [], v = new Float32Array(K);
   for (let i = 0; i < K; i++) ang.push(track.at(i / K)[2]);
-  const kap = new Float32Array(K);
-  for (let i = 0; i < K; i++) { let d = ang[(i + 1) % K] - ang[i]; d = Math.atan2(Math.sin(d), Math.cos(d)); kap[i] = Math.abs(d) / ds; }
-  const ks = new Float32Array(K);
-  for (let i = 0; i < K; i++) { let t = 0; for (let k = -6; k <= 6; k++) t += kap[(i + k + K) % K]; ks[i] = t / 13; }
+  const kap = new Float32Array(K), kapS = new Float32Array(K);
+  for (let i = 0; i < K; i++) { let d = ang[(i + 1) % K] - ang[i]; d = Math.atan2(Math.sin(d), Math.cos(d)); kap[i] = Math.abs(d) / ds; kapS[i] = d / ds; }
+  const ks = new Float32Array(K), sks = new Float32Array(K);
+  for (let i = 0; i < K; i++) { let t = 0, u = 0; for (let k = -6; k <= 6; k++) { t += kap[(i + k + K) % K]; u += kapS[(i + k + K) % K]; } ks[i] = t / 13; sks[i] = u / 13; }
   const VMAX = 94, ALAT = 36;
   for (let i = 0; i < K; i++) v[i] = Math.min(VMAX, Math.sqrt(ALAT / Math.max(ks[i], 1e-5)));
   for (let pass = 0; pass < 2; pass++) {
@@ -105,7 +105,32 @@ function makeProfile(track, L) {
     for (let i = K - 1; i >= 0; i--) { const b = v[(i + 1) % K], lim = Math.sqrt(b * b + 2 * 42 * ds); if (v[i] > lim) v[i] = lim; }
   }
   let T0 = 0; for (let i = 0; i < K; i++) T0 += ds / v[i];
-  return { T0, v, vAt(frac) { const f = (((frac % 1) + 1) % 1) * K, i = Math.floor(f), u = f - i; return v[i] * (1 - u) + v[(i + 1) % K] * u; } };
+  // 符号付き曲率 g（+ = 右コーナー）→ 理想のライン（アウト・イン・アウト）。pref は -1(左端)〜+1(右端)
+  const g = new Float32Array(K), pref = new Float32Array(K);
+  for (let i = 0; i < K; i++) g[i] = clamp(sks[i] / 0.012, -1, 1);
+  const ah = Math.round(100 / ds), bh = Math.round(70 / ds);
+  for (let i = 0; i < K; i++) { const gi = g[i], k = 1 - Math.abs(gi); pref[i] = clamp(0.8 * gi - 0.5 * g[(i + ah) % K] * k - 0.35 * g[(i - bh + K) % K] * k, -1, 1); }
+  // ブレーキングゾーン（強い減速区間の始点）。side = インサイド側（+右 / -左）
+  const ev = [];
+  for (let i = 0; i < K; i++) {
+    const v0 = v[i], v1 = v[(i + 1) % K], vp = v[(i - 1 + K) % K];
+    if (v1 < v0 - 0.01 && !(v0 < vp - 0.01)) {
+      let j = i; while (j < i + K / 2 && v[(j + 1) % K] < v[j % K] - 0.005) j++;
+      const jm = j % K, vmin = v[jm];
+      if (v0 - vmin > Math.max(12, v0 * 0.22)) ev.push({ i, side: Math.sign(sks[jm]) || (Math.random() < 0.5 ? 1 : -1), vmin, id: ev.length });
+    }
+  }
+  const at = (arr, frac) => { const f = (((frac % 1) + 1) % 1) * K, i = Math.floor(f), u = f - i; return arr[i] * (1 - u) + arr[(i + 1) % K] * u; };
+  return {
+    T0, v, ds,
+    vAt(frac) { const f = (((frac % 1) + 1) % 1) * K, i = Math.floor(f), u = f - i; return v[i] * (1 - u) + v[(i + 1) % K] * u; },
+    gAt: frac => at(g, frac), prefAt: frac => at(pref, frac),
+    nextBrake(frac, maxD) { // 前方 maxD(m) 以内の最初のブレーキングゾーン
+      const idx = (((frac % 1) + 1) % 1) * K; let best = null;
+      for (const e of ev) { const d = ((e.i - idx + K) % K) * ds; if (d > 0 && d <= maxD && (!best || d < best.d)) best = { d, side: e.side, id: e.id, vmin: e.vmin }; }
+      return best;
+    },
+  };
 }
 
 // 地形（木・建物・観客席）を決定論的に生成
@@ -234,9 +259,10 @@ function startRace() {
   const grid = qualifying(c);
   const L = c.len * 1000;
   const prof = makeProfile(c._track, L);
+  const Wd = (c.width || 14) / 2 - 1.6; // 走行可能な横位置の範囲（車幅2mぶん内側）
   const wetStart = setup.weather.rain.find(r => r.s <= 0.02);
   R = {
-    c, L, prof, track: c._track, wx: setup.weather, time: 0, leaderLap: 0, checkered: false, finished: false,
+    c, L, prof, track: c._track, W: c.width || 14, Wd, wx: setup.weather, time: 0, leaderLap: 0, checkered: false, finished: false,
     sc: null, scCar: 0, wet: wetStart ? wetStart.i * 0.9 : 0, rainNow: 0, target: 1, slowUntil: 0, paused: false,
     radioOn: $('#optRadio').checked, autoSlow: $('#optAutoSlow').checked, finishOrder: [], yellow: 0, log: [],
     cars: grid.map((d, i) => {
@@ -247,8 +273,9 @@ function startRace() {
         d, team: d.team, player, pIdx, grid: i + 1, dist: -i * 8 - 4, lap: 0, lapStart: 0, lastLap: NaN, bestLap: Infinity,
         tyre, wear: 0, age: 0, used: new Set([tyre]), mode: 'std', energy: 100, ovMode: false, box: null, nextTyre: player ? 'H' : null,
         pitTimer: 0, pitTotal: 0, pitStationary: 0, out: false, reason: '', stops: 0, finished: false, finishTime: 0,
-        curLT: 0, cooldown: 0, passing: null, passUntil: 0, gapAhead: 99, stuck: 0, mismatchLaps: 0,
+        curLT: 0, cooldown: 0, gapAhead: 99, stuck: 0, mismatchLaps: 0,
         pitAt: Math.round(rnd(62, 78)), radioCD: 0, damage: 0, posPrev: i + 1, penalty: 0,
+        lat: (i % 2 ? 1 : -1) * Math.min(3.2, Wd * 0.6), latV: 0, bat: null, def: null, tow: 0, dirty: 0, gapM: 999, nbA: null, yieldUntil: 0,
       };
     }),
   };
@@ -424,11 +451,33 @@ function tick(dt) {
     R._wetIdeal = idealTyre(R.wet);
   }
 
-  // ---- 移動 ----
-  const ord = order().filter(c => !c.out && !c.finished);
+  // ---- 前後関係の事前計算：スリップストリームとダーティエア ----
+  const ordAll = order().filter(c => !c.out && !c.finished);
   const scOn = R.sc && R.sc.type === 'SC';
-  for (let i = 0; i < ord.length; i++) {
-    const car = ord[i];
+  const runs = ordAll.filter(c => c.pitTimer <= 0);
+  runs.forEach((car, i) => {
+    car.tow = 0; car.dirty = 0; car.nbA = null; car.gapM = 999;
+    if (i === 0) { car.gapAhead = 99; car.ovMode = false; return; }
+    const a = runs[i - 1], v = Math.max(5, spAt(car));
+    const gapM = a.dist - car.dist;
+    if (gapM > R.L * 0.5) { car.gapAhead = 99; car.ovMode = false; return; }
+    car.nbA = a; car.gapM = gapM;
+    const gT = gapM / v; car.gapAhead = gT;
+    // 2026 オーバーテイクモード：前車と1秒以内で追加デプロイ（ドライバーが自動使用）
+    car.ovMode = !R.sc && gT < 1.0 && car.energy > 15 && car.lap >= 1;
+    const inWake = Math.abs(a.lat - car.lat) < 2.6; // 前車の真後ろ（風よけの中）にいるか
+    if (inWake && !R.sc) {
+      const vr = Math.min(1, v / 85);
+      car.tow = 0.05 * clamp(1 - gT / 1.0, 0, 1) * vr * vr;          // 直線で最大 +5%（約15km/h）
+      car.dirty = 0.012 * clamp(1 - gT / 0.8, 0, 1) * (1 - vr * vr); // コーナーではダウンフォースが抜けて遅くなる
+    }
+    if (inWake && gT < 0.6) car.stuck += dt; else if (gT > 1.2) car.stuck = 0;
+    if (car.player && car.stuck > car.curLT * 4 && Math.random() < 0.01) { radio(car, pick(RADIO.blocked).replace('{car}', a.d.code)); car.stuck = 0; }
+  });
+
+  // ---- 移動 ----
+  for (let i = 0; i < ordAll.length; i++) {
+    const car = ordAll[i];
     car.cooldown -= dt;
     if (car.pitTimer > 0) {
       car.pitTimer -= dt;
@@ -437,8 +486,21 @@ function tick(dt) {
     }
     let sp = spAt(car);
     if (scOn && i > 0) { // SC中は隊列を詰める
-      const gT = (ord[i - 1].dist - car.dist) / sp;
-      if (ord[i - 1].pitTimer <= 0 && gT > 1.0 && gT < R.c.baseLap * 0.8) sp *= 1.35;
+      const gT = (ordAll[i - 1].dist - car.dist) / sp;
+      if (ordAll[i - 1].pitTimer <= 0 && gT > 1.0 && gT < R.c.baseLap * 0.8) sp *= 1.35;
+    }
+    sp *= 1 + car.tow - car.dirty + (car.ovMode ? 0.012 : 0);
+    if (car.def && R.time < car.def.until) sp *= 0.992;      // ディフェンスラインは遠回りでロスがある
+    if (R.time < car.yieldUntil) sp *= 0.985;                 // 仕掛けられて譲る
+    if (car.bat) {
+      if (car.bat.mode === 'pass') sp += car.bat.rate;        // 遅らせたブレーキングで並走から前へ
+      else if (car.bat.mode === 'abort') sp *= 0.97;
+    }
+    // 前走車と同じラインにいるときは追突しない（スムーズに車間を保つ）。別ラインなら並走できる
+    const a = car.nbA;
+    if (a) {
+      const spA = Math.max(5, spAt(a)), minGap = (scOn ? 0.55 : 0.2) * spA;
+      if (car.gapM < minGap && Math.abs(a.lat - car.lat) < 2.0) sp = Math.min(sp, spA * (0.7 + 0.3 * Math.max(0, car.gapM) / minGap));
     }
     if (car.lap === 0) { car.startV = (car.startV || 0) + 10 * dt; sp = Math.min(sp, car.startV); } // 停止状態からの発進加速
     car.dist += sp * dt;
@@ -448,45 +510,98 @@ function tick(dt) {
     if (car.dist >= (car.lap + 1) * R.L) onLap(car);
   }
 
-  // ---- バトル／オーバーテイク ----
-  const ord2 = order().filter(c => !c.out && !c.finished && c.pitTimer <= 0);
-  for (let i = 1; i < ord2.length; i++) {
-    const a = ord2[i - 1], b = ord2[i];
-    const sp = spAt(b);
-    const gap = a.dist - b.dist;
-    if (gap > R.L * 0.5) { b.gapAhead = 99; b.ovMode = false; continue; }
-    const gT = gap / sp;
-    b.gapAhead = gT;
-    // 2026 オーバーテイクモード：前車と1秒以内で追加デプロイ（ドライバーが自動使用）
-    b.ovMode = !R.sc && gT < 1.0 && b.energy > 15 && b.lap >= 1;
-    const minGap = (scOn ? 0.55 : 0.2) * sp;
-    if (gap >= minGap) { if (gT > 1.2) b.stuck = 0; continue; }
-    if (b.passing === a && R.time < b.passUntil) continue;
-    const faster = a.curLT - b.curLT;
-    if (!R.sc && faster > 0.15 * (R.c.baseLap / 90) && b.cooldown <= 0 && !R.yellow) {
-      b.cooldown = b.curLT * 0.33;
-      const s = R.c.baseLap / 90;
-      let p = 0.12 + (faster / s) * 0.3 + (b.d.ovt - 0.75) * 0.7 + (b.ovMode ? 0.12 : 0) - R.c.ovt * 0.28 - (a.d.ovt - 0.75) * 0.3;
-      p *= (0.8 + b.d.aggr * 0.4) * (1.15 - R.c.ovt * 0.9); // 抜きにくいコース（モナコ等）ほど成功率が下がる
-      if (Math.random() < clamp(p, 0.015, 0.85)) {
-        // 成功したら実際に前へ出る（以前はフラグだけで位置が入れ替わらなかった）
-        b.dist = a.dist + 6; a.cooldown = Math.max(a.cooldown, a.curLT * 0.12);
-        b.passing = a; b.passUntil = R.time + 2.5; b.stuck = 0; R.passes = (R.passes || 0) + 1;
-        if (a.player || b.player) addLog(`⚔️ <b>${b.d.code}</b> が <b>${a.d.code}</b> をオーバーテイク`);
-        if (b.player) radio(b, pick(RADIO.pass));
-        if (a.player && Math.random() < 0.6) radio(a, pick(RADIO.passed));
-        // 接触リスク
-        if (Math.random() < 0.0035 * (a.d.aggr + b.d.aggr) * (1 + R.wet * 2)) collision(a, b);
-        continue;
-      }
+  // ---- ライン取り（横位置）----
+  const Wd = R.Wd;
+  for (let i = 0; i < runs.length; i++) {
+    const car = runs[i];
+    if (car.out || car.finished || car.pitTimer > 0) continue;
+    const fr = car.dist / R.L, pref = R.prof.prefAt(fr) * Wd;
+    let latT = pref;
+    if (scOn) latT = pref * 0.35;
+    else if (car.bat && car.bat.mode !== 'abort') latT = car.bat.side * Wd;                 // インサイドへ（仕掛け）
+    else if (car.def && R.time < car.def.until) latT = car.def.side * Wd;                   // インサイドを閉める（ディフェンス）
+    else if (car.nbA && car.gapAhead < 1.2 && Math.abs(R.prof.gAt(fr)) < 0.25) latT = car.nbA.lat * 0.9 + pref * 0.1; // 直線では前走車の風よけに入る
+    const rate = (car.bat || car.def) ? 2.6 : 1.4; // 横移動の速さ(m/s)
+    let nl = clamp(car.lat + clamp(latT - car.lat, -rate * dt, rate * dt), -Wd, Wd);
+    // 横に並んでいる車（隣のライン）には幅寄せしない
+    let ok = true;
+    for (let k = Math.max(0, i - 3); k <= Math.min(runs.length - 1, i + 3); k++) {
+      const o = runs[k]; if (o === car || Math.abs(o.dist - car.dist) > 5.5) continue;
+      const d1 = Math.abs(nl - o.lat), d0 = Math.abs(car.lat - o.lat);
+      if (d1 < 2.1 && d1 < d0) { ok = false; break; }
     }
-    b.dist = a.dist - minGap;
-    b.stuck += dt;
-    if (b.player && b.stuck > b.curLT * 4 && Math.random() < 0.01) { radio(b, pick(RADIO.blocked).replace('{car}', a.d.code)); b.stuck = 0; }
+    car.latV = ok ? (nl - car.lat) / dt : 0;
+    if (ok) car.lat = nl;
+  }
+
+  // ---- 仕掛け・ディフェンス・ブレーキング勝負 ----
+  if (!R.sc && !R.yellow) {
+    runs.forEach(car => {
+      const a = car.nbA;
+      // 仕掛けるかどうかは、ブレーキングゾーンの手前で1回だけ判断する
+      if (!car.bat && a && !a.out && car.cooldown <= 0 && car.gapM > 2 && car.gapM < 32 && car.lap >= 1) {
+        const nb = R.prof.nextBrake(car.dist / R.L, 340);
+        const key = nb ? nb.id + ':' + car.lap : null;
+        if (nb && nb.d > 70 && nb.d < 320 && car._tryKey !== key) {
+          car._tryKey = key;
+          const s = R.c.baseLap / 90, paceAdv = (a.curLT - car.curLT) / s;
+          // ペースで勝っているか、スリップで十分に詰められたときに仕掛ける（毎回は仕掛けない）
+          const want = 0.01 + Math.max(0, paceAdv) * 0.3 + car.tow * 3 + (car.d.aggr - 0.5) * 0.15 + (car.ovMode ? 0.05 : 0);
+          if (Math.random() < clamp(want, 0.02, 0.9)) startAttack(car, a, nb);
+        }
+      }
+      const bt = car.bat; if (!bt) return;
+      const t = bt.t;
+      if (car.out || t.out || t.pitTimer > 0 || car.pitTimer > 0 || R.time > bt.tEnd) { car.bat = null; car.cooldown = Math.max(car.cooldown, 2); return; }
+      if (bt.mode === 'run') {
+        const gapM = t.dist - car.dist;
+        if (gapM <= -1) { finishPass(car, t); return; } // 直線で既に前に出た
+        if (car.dist >= bt.brakeD) resolveBraking(car, t, gapM);
+      } else if (bt.mode === 'pass') {
+        if (car.dist > t.dist + 3) finishPass(car, t);
+        else if (R.time - bt.tPass > bt.T + 1.5) { car.bat = null; car.cooldown = car.curLT * 0.15; } // 抜ききれず断念
+      } else if (bt.mode === 'abort' && R.time > bt.tEnd2) { car.bat = null; car.cooldown = car.curLT * 0.6; } // 失敗後はしばらく様子を見る
+    });
   }
 
   if (R.yellow > 0) R.yellow -= dt;
   if (running().length === 0 && !R.finished) finishRace();
+}
+
+// ---- 仕掛け：スリップストリームで詰め、ブレーキングポイントでインサイドに飛び込む ----
+function startAttack(b, a, nb) {
+  const side = nb.side;
+  b.bat = { t: a, side, mode: 'run', brakeD: b.dist + nb.d, tEnd: R.time + 14 };
+  // 前の車のディフェンス判断（ルール上、動くのは1回だけ）：インサイドを閉めに行く
+  const pDef = clamp(0.30 + (a.d.aggr - 0.5) * 0.5 + (a.d.ovt - 0.75) * 1.2 + (a.d.cons - 0.8) * 0.3 - b.tow * 2, 0.08, 0.8);
+  if (Math.random() < pDef) { a.def = { side, until: R.time + 9 }; if (a.player) addLog(`🛡️ <b>${a.d.code}</b> がインサイドを閉めてディフェンス`); }
+  if (a.player || b.player) addLog(`⚔️ <b>${b.d.code}</b> が <b>${a.d.code}</b> にスリップから${side > 0 ? '右' : '左'}インサイドへ仕掛ける`);
+}
+function resolveBraking(b, a, gapM) {
+  const bt = b.bat, sep = Math.abs(a.lat - b.lat);
+  const covered = sep < 2.0; // 前の車がインサイドを閉めていて、並ぶ隙間が無い
+  if (covered) {
+    if (Math.random() < 0.008 + b.d.aggr * 0.014 + R.wet * 0.03) collision(a, b); // 突っ込みすぎ
+    bt.mode = 'abort'; bt.tEnd2 = R.time + 1.5; bt.tEnd = R.time + 3;
+    if (b.player) radio(b, 'ラインを閉められた、抜けない');
+    return;
+  }
+  // ブレーキングで「どれだけ詰められるか」と「守りの強さ」で勝負
+  const capacity = 5 + (b.d.ovt - 0.5) * 20 + b.d.aggr * 6 + (b.ovMode ? 3 : 0) + b.tow * 60; // m
+  const defend = (a.d.ovt - 0.5) * 8 + (a.d.cons - 0.8) * 10;
+  let p = clamp((capacity - gapM - defend) / Math.max(6, capacity) + 0.35, 0, 0.95);
+  p *= clamp(1.15 - R.c.ovt * 0.55, 0.4, 1.1) * (R.wet > 0.3 ? 0.9 : 1);
+  if (Math.random() < p) {
+    bt.mode = 'pass'; bt.tPass = R.time; bt.T = 4; bt.rate = Math.min(8, (gapM + 7) / bt.T); bt.tEnd = R.time + 12;
+    a.yieldUntil = R.time + bt.T;
+  } else { bt.mode = 'abort'; bt.tEnd2 = R.time + 1.5; bt.tEnd = R.time + 3; }
+}
+function finishPass(b, a) {
+  b.bat = null; b.cooldown = b.curLT * 0.15; a.cooldown = Math.max(a.cooldown, a.curLT * 0.12); a.def = null; b.stuck = 0;
+  R.passes = (R.passes || 0) + 1;
+  if (a.player || b.player) addLog(`✅ <b>${b.d.code}</b> が <b>${a.d.code}</b> をオーバーテイク`);
+  if (b.player) radio(b, pick(RADIO.pass));
+  if (a.player && Math.random() < 0.6) radio(a, pick(RADIO.passed));
 }
 
 function onLap(car) {
@@ -573,7 +688,7 @@ function pitEnter(car) {
   const stationary = car.team.pitCrew + Math.abs(gauss()) * 0.35 + (Math.random() < 0.045 ? rnd(2, 9) : 0) + (car.damage ? 6 : 0);
   const loss = c.pitLoss * (R.sc ? (R.sc.type === 'SC' ? 0.55 : 0.62) : 1);
   car.pitStationary = stationary; car.pitTotal = loss + stationary; car.pitTimer = car.pitTotal;
-  car.newTyre = car.box; car.box = null; car.stops++;
+  car.newTyre = car.box; car.box = null; car.stops++; car.bat = null; car.def = null; car.lat = 0;
   car.dist = car.lap * R.L; // ピットはコントロールライン上で処理
   if (car.player) {
     addLog(`🔧 <b>${car.d.code}</b> ピットイン → ${COMPOUNDS[car.newTyre].jp}`);
@@ -807,6 +922,9 @@ function updateUI() {
     else if (car.finished) st = '🏁 フィニッシュ';
     else if (mm) st = '⚠️ タイヤが路面コンディションに合っていません';
     else if (!R.anyWet && [...car.used].filter(isDry).length < 2) st = 'ℹ️ 2種類のドライコンパウンド使用義務 未消化';
+    if (car.bat) st = car.bat.mode === 'pass' ? '⚔️ オーバーテイク中（並走）' : car.bat.mode === 'abort' ? '↩️ 仕掛け失敗、引く' : `⚔️ ${car.bat.side > 0 ? '右' : '左'}インサイドへライン変更、仕掛け中`;
+    else if (car.def && R.time < car.def.until) st = '🛡️ ディフェンス中（インサイドを閉める）';
+    else if (car.tow > 0.008) st = '💨 スリップストリームで接近中';
     if (car.damage) st += ' 🔧ダメージあり';
     el.querySelector('.status').textContent = st;
   });
