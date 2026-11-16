@@ -32,6 +32,7 @@ function computePace() {
     t.pace = 1 - (tg[i] - gmin) / (gmax - gmin) * 0.5;
     t.points = t.drivers.reduce((s, d) => s + (champ[d.code] || 0), 0);
     t.reliability = (DNF_RATE_2026[t.realId] ?? 0.12) * 0.55;
+    t.crashMul = 0.6 + (1 - t.pace) * 1.8; // クラッシュしやすさ：最強チーム0.6倍〜最下位チーム1.5倍
     const [a, b] = t.drivers;
     t.drivers.forEach(d => {
       const mate = d === a ? b : a;
@@ -568,6 +569,9 @@ function tick(dt) {
   if (running().length === 0 && !R.finished) finishRace();
 }
 
+// クラッシュ頻度の調整値（1レースにクラッシュ1〜2台が目安。雨・弱いチーム・攻撃的なドライバーで増える）
+const CRASH_BASE = 0.5, CONTACT_RETIRE = 0.25;
+
 // ---- 仕掛け：スリップストリームで詰め、ブレーキングポイントでインサイドに飛び込む ----
 function startAttack(b, a, nb) {
   const side = nb.side;
@@ -631,8 +635,8 @@ function onLap(car) {
   // トラブル・クラッシュ判定
   const mm = tyreMismatch(car);
   const pRel = car.team.reliability / c.laps * (1 + R.wet * 0.5);
-  let pCrash = (0.03 + (1 - car.d.cons) * 0.13) / c.laps * (1 + R.wet * 2.2) * (car.mode === 'push' ? 1.3 : 1) * (1 + (car.d.aggr - 0.6));
-  if (mm >= 2) pCrash *= 4 * mm;
+  let pCrash = (0.03 + (1 - car.d.cons) * 0.13) * CRASH_BASE / c.laps * car.team.crashMul * (1 + R.wet * 0.8) * (car.mode === 'push' ? 1.3 : 1) * (1 + (car.d.aggr - 0.6));
+  if (mm >= 2) pCrash *= 3 * mm;
   if (car.wear > 92) pCrash *= 3;
   if (R.sc) pCrash *= 0.1;
   if (car.lap > 0 && Math.random() < pRel) { retire(car, 'failure'); return; }
@@ -712,7 +716,7 @@ function pitExit(car) {
 function collision(a, b) {
   const victim = Math.random() < 0.5 ? a : b;
   addLog(`💥 <b>${a.d.code}</b> と <b>${b.d.code}</b> が接触！`);
-  if (Math.random() < 0.45) retire(victim, 'crash');
+  if (Math.random() < clamp(CONTACT_RETIRE * victim.team.crashMul, 0.1, 0.5)) retire(victim, 'crash');
   else { victim.damage = rnd(0.4, 1.4); if (!victim.player) victim.box = victim.tyre === 'S' ? 'M' : victim.tyre; if (victim.player) { radio(victim, 'フロントウイングが壊れた！', true); event(`${victim.d.code}: ダメージ`, '#e10600'); } }
 }
 
